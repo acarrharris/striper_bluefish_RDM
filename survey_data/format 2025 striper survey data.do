@@ -301,33 +301,7 @@ clogit choice cost sqrt_striper_keep sqrt_striper_rel striper_length sqrt_bluefi
 	group(gid) vce(cluster qtid)		
 
 
-gen total_str_keep_length=striper_length*striper_keep
-gen total_str_rel_length=striper_length*striper_rel
-gen total_blu_keep_length=bluefish_length*bluefish_keep
-gen total_blu_rel_length=bluefish_length*bluefish_rel	
 
-su total_str_keep_length if inlist(alt, 1, 2)  & e(sample)
-local total_str_keep_length=`r(sum)'
-
-su striper_keep if inlist(alt, 1, 2)  & e(sample)
-local total_str_keep=`r(sum)'
-
-local c_len_striper_kept = len_striper_keep -`total_str_keep_length'/`total_str_keep'
-
-su striper_length if inlist(alt, 1, 2) & e(sample)
-local c_len_striper_released = len_striper_rel - r(mean)
-
-su bluefish_length if inlist(alt, 1, 2) & e(sample)
-local c_len_blue_kept = len_blue_keep - r(mean)
-
-su bluefish_length if inlist(alt, 1, 2) & e(sample)
-local c_len_blue_released = len_blue_rel - r(mean)
-
-gen c_striper_keep_length= striper_keep*`c_len_striper_kept'
-gen c_striper_rel_length=  striper_rel*`c_len_striper_released'
-gen c_blue_keep_length=  blue_keep*`c_len_blue_kept'
-gen c_blue_rel_length=  blue_rel*`c_len_blue_released'	
-	
 	
 ****************************************************
 
