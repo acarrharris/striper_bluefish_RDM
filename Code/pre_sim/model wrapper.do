@@ -37,7 +37,6 @@
 global calibration_year "(year==2023)"  // For now, use catch data from 2023 as predictions for 2024. Alternative time periods can be tested.
 global calibration_year_prev "(year==2023 | year==2022)"  // For now, use catch data from 2023 as predictions for 2024. Alternative time periods can be tested.
 
-
 global calibration_date_start td(01jan2023)
 global calibration_date_end td(31dec2023)
 
@@ -67,6 +66,8 @@ global input_data_cd "E:\Lou_projects\striper_bluefish_RDM\input_data" /* Lou's 
 global input_code_cd "C:\Users\andrew.carr-harris\Desktop\Git\striper_bluefish_RDM\Code\pre_sim"
 global iterative_input_data_cd "E:\Lou_projects\striper_bluefish_RDM\process_data"
 global figure_cd  "E:\Lou_projects\striper_bluefish_RDM\figures"
+global length_data_cd "E:\Lou_projects\striper_bluefish_RDM\input_data\length data"
+
 
 * set a global seed #
 global seed 03211990
@@ -90,7 +91,7 @@ do "$input_code_cd\directed_trips_calibration.do"
 		*THIS NEEDS TO BE ADJUSTED EVERY YEAR. 
 
 // 3) Create distributions of costs per trip across strata - only needs to be run once
-*do "$input_code_cd\survey trip costs.do"
+do "$input_code_cd\survey trip costs.do"
 
 // 4) Create draw of angler preference parameters 
 *do "$input_code_cd\estimate angler preferences.do" - only needs to be run once

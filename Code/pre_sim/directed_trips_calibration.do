@@ -41,23 +41,35 @@ replace prim2_common=subinstr(lower(prim2_common)," ","",.)
 
 drop _merge
 
+* store prim --> prim_common key for trip cost calculation 
+preserve 
+keep prim1 prim1_common
+duplicates drop 
+drop if prim1=="" | prim1_common==""
+duplicates tag prim1, gen(dup)
+*browse if dup>0
+drop if dup>0
+drop dup
+save "$input_data_cd/prim1.dta", replace
+restore 
+
+preserve 
+keep prim2 prim2_common
+duplicates drop 
+drop if prim2=="" | prim2_common==""
+duplicates drop 
+duplicates tag prim2, gen(dup)
+*browse if dup>0
+drop if dup>0
+drop dup
+save "$input_data_cd/prim2.dta", replace
+restore 
+
+
 keep if $calibration_year_prev
 
  /* ensure only relevant states */
-keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37)
-keep if inlist(st, 25)
-
- /* classify trips into dom_id=1 (DOMAIN OF INTEREST) and dom_id=2 ('OTHER' DOMAIN). */
-gen str1 dom_id="2"
-replace dom_id="1" if strmatch(common, "stripedbass") 
-replace dom_id="1" if strmatch(prim1_common, "stripedbass") 
-
-replace dom_id="1" if strmatch(common, "bluefish") 
-replace dom_id="1" if strmatch(prim1_common, "bluefish") 
-
-tostring wave, gen(w2)
-tostring year, gen(year2)
-gen st2 = string(st,"%02.0f")
+keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37, 23, 33)
 
 gen state="MA" if st==25
 replace state="MD" if st==24
@@ -71,6 +83,10 @@ replace state="NC" if st==37
 replace state="ME" if st==23
 replace state="NH" if st==33
 
+tostring wave, gen(w2)
+tostring year, gen(year2)
+gen st2 = string(st,"%02.0f")
+
 gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
 replace mode1="pr" if inlist(mode_fx, "7")
 replace mode1="fh" if inlist(mode_fx, "4", "5")
@@ -80,6 +96,78 @@ gen month1=substr(date, 5, 2)
 gen day1=substr(date, 7, 2)
 drop if inlist(day1,"9x", "xx") 
 destring day1, replace
+destring month, replace
+gen date2=dmy(day1, month, year)
+format date2 %td
+
+
+* Assign managament areas
+preserve
+import excel using "$input_data_cd/SB_MRIP_Management_Areas_DE_NC_NY_VA_reformat.xlsx", clear firstrow
+duplicates drop 
+drop if intsite==483 & state=="NC" & mgt=="CENTRAL SOUTHERN"
+tempfile sites
+save `sites', replace
+restore
+merge m:1 state intsite using `sites', keep(1 3)
+
+replace mgt = "DE_RIVER_BAY_PRIMARY_AREA" if mgt=="" & state=="DE" & inlist(intsite, 65, 73, 106) 
+replace mgt= "CHESAPEAKE BAY" if mgt=="" & state=="VA" & inlist(intsite, 212, 995) 
+
+replace mgt="ALB"  if mgt=="ALBEMARLE SOUND" 
+replace mgt="OCN"  if mgt=="ATLANTIC OCEAN" 
+replace mgt="CNTRL"  if mgt=="CENTRAL SOUTHERN" 
+replace mgt="CHES"  if mgt=="CHESAPEAKE BAY" 
+replace mgt="NANT"  if mgt=="DE_NATICOKE_RIVER_SPAWNING_AREA" 
+replace mgt="DERIV"  if mgt=="DE_RIVER_BAY_PRIMARY_AREA" 
+replace mgt="HUDN"  if mgt=="HUDSON_NORTH_OF_GW_BRIDGE" 
+replace mgt="HUDS"  if mgt=="MARINE_AND_SOUTH_OF_GW_BRIDGE" 
+replace mgt="POTO"  if mgt=="POTOMAC RIVER TRIBUTARIES" 
+
+replace mgt="OCN" if state=="DE" & area=="1"
+
+* Deal with Maryland management areas
+
+* First, identify Potomac River sites. 
+* There are a handful of sites along the Potomoac River, but near a striper-regs-map mgt. area
+* If a trip is a boat trip, classify it as POT
+* If a trip is a shore, classify it as CHES, unless it is one of the few sites where a shore trip would likely be fishing in the POT
+replace mgt="POT" if state=="MD" & inlist(intsite, 788, 1969, 1865, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "pr", "fh")
+replace mgt="POT" if state=="MD" & inlist(intsite, 1865) & inlist(mode1, "sh")
+replace mgt="CHES" if state=="MD" & inlist(intsite, 788, 1969, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "sh")
+
+* Next, MD coastal sites
+replace mgt="OCN"  if state=="MD" & inlist(intsite,3097, 853, 4419, 24, 856, 1493, 858, 860,  906, 4349, 1658, 152, 1183, 3442)
+
+* Lastly, merge MD march-may sites to regulation region site list 
+replace mgt="CHES" if state=="MD"  & mgt==""
+
+replace mgt="ALL" if mgt==""
+
+drop region
+gen region=state+mgt
+
+
+drop _merge
+
+tempfile base1
+save `base1', replace 
+
+levelsof region /*if state=="MA"*/, local(sts)
+foreach s of local sts{
+	*local s="DEDERIV"
+	u `base1', clear 
+	
+	keep if region=="`s'"
+
+ /* classify trips into dom_id=1 (DOMAIN OF INTEREST) and dom_id=2 ('OTHER' DOMAIN). */
+gen str1 dom_id="2"
+replace dom_id="1" if strmatch(common, "stripedbass") 
+replace dom_id="1" if strmatch(prim1_common, "stripedbass") 
+
+replace dom_id="1" if strmatch(common, "bluefish") 
+replace dom_id="1" if strmatch(prim1_common, "bluefish") 
+
 
 // Deal with Group Catch: 
 	// This bit of code generates a flag for each year-strat_id psu_id leader. (equal to the lowest of the dom_id)
@@ -122,16 +210,16 @@ From the MRIP data handbook:
 */
 
 /* generate the estimation strata - year, month, kind-of-day (weekend including fed holidays/weekday), mode (pr/fh), for each round of SE-imputation*/
-gen my_dom_id_string0=state+"_"+year2+"_"+month1+"_"+kod+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string0=region+"_"+year2+"_"+month1+"_"+kod+"_"+mode1+"_"+ dom_id
 replace my_dom_id_string0=ltrim(rtrim(my_dom_id_string0))
 
-gen my_dom_id_string1=state+"_"+year2+"_"+w2+"_"+kod+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string1=region+"_"+year2+"_"+w2+"_"+kod+"_"+mode1+"_"+ dom_id
 replace my_dom_id_string1=ltrim(rtrim(my_dom_id_string1))
 
-gen my_dom_id_string2=state+"_"+month1+"_"+kod+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string2=region+"_"+month1+"_"+kod+"_"+mode1+"_"+ dom_id
 replace my_dom_id_string2=ltrim(rtrim(my_dom_id_string2))
 
-gen my_dom_id_string3=state+"_"+w2+"_"+kod+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string3=region+"_"+w2+"_"+kod+"_"+mode1+"_"+ dom_id
 replace my_dom_id_string3=ltrim(rtrim(my_dom_id_string3))
 
 tempfile base 
@@ -198,7 +286,7 @@ use `master', clear
 order my*
 split my_dom_id_string0, parse(_)
 
-rename my_dom_id_string01 state
+rename my_dom_id_string01 region
 rename my_dom_id_string02 year
 rename my_dom_id_string03 month1
 rename my_dom_id_string04 kod
@@ -220,13 +308,13 @@ preserve
 keep if my_dom_id_string0!=""
 drop my_dom_id_string1 my_dom_id_string2 my_dom_id_string3
 
-gen my_dom_id_string1=state+"_"+year+"_"+w2+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string1=region+"_"+year+"_"+w2+"_"+kod+"_"+mode+"_"+ dom_id
 replace my_dom_id_string1=ltrim(rtrim(my_dom_id_string1))
 
-gen my_dom_id_string2=state+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string2=region+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
 replace my_dom_id_string2=ltrim(rtrim(my_dom_id_string2))
 
-gen my_dom_id_string3=state+"_"+w2+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string3=region+"_"+w2+"_"+kod+"_"+mode+"_"+ dom_id
 replace my_dom_id_string3=ltrim(rtrim(my_dom_id_string3))
 
 keep my_dom_id_string0* b pse se
@@ -237,9 +325,9 @@ restore
 preserve
 keep if my_dom_id_string1!=""
 drop my_dom_id_string0 my_dom_id_string2 my_dom_id_string3
-drop  state year month1 month kod mode dom_id 
+drop  region year month1 month kod mode dom_id 
 split my_dom_id_string1, parse(_)
-rename my_dom_id_string11 state
+rename my_dom_id_string11 region
 rename my_dom_id_string12 year
 rename my_dom_id_string13 wave
 rename my_dom_id_string14 kod
@@ -249,7 +337,7 @@ rename my_dom_id_string16 dom_id
 destring year, replace
 keep if $calibration_year
 expand 2, gen(dup)
-bysort state year wave kod mode dom_id: gen tab=_n
+bysort region year wave kod mode dom_id: gen tab=_n
 gen month=1 if wave=="1" & tab==1
 replace month=2 if wave=="1" & tab==2
 replace month=3 if wave=="2" & tab==1
@@ -265,7 +353,7 @@ replace month=12 if wave=="6" & tab==2
 gen month1 = string(month,"%02.0f")
 tostring year, gen(year2)
 
-gen my_dom_id_string0=state+"_"+year2+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string0=region+"_"+year2+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
 keep my_dom_id_string0 pse
 rename pse pse_round1
 tempfile round1
@@ -275,16 +363,16 @@ restore
 preserve
 keep if my_dom_id_string2!=""
 drop my_dom_id_string0 my_dom_id_string1 my_dom_id_string3
-drop  state year month1 month kod mode dom_id w2
+drop  region year month1 month kod mode dom_id w2
 split my_dom_id_string2, parse(_)
-rename my_dom_id_string21 state
+rename my_dom_id_string21 region
 rename my_dom_id_string22 month
 rename my_dom_id_string23 kod
 rename my_dom_id_string24 mode
 rename my_dom_id_string25 dom_id
 gen year="2023"
 
-gen my_dom_id_string0=state+"_"+year+"_"+month+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string0=region+"_"+year+"_"+month+"_"+kod+"_"+mode+"_"+ dom_id
 keep my_dom_id_string0 pse
 rename pse pse_round2
 tempfile round2
@@ -294,16 +382,16 @@ restore
 preserve
 keep if my_dom_id_string3!=""
 drop my_dom_id_string0 my_dom_id_string1 my_dom_id_string2
-drop  state year month1 month kod mode dom_id w2
+drop  region year month1 month kod mode dom_id w2
 split my_dom_id_string3, parse(_)
-rename my_dom_id_string31 state
+rename my_dom_id_string31 region
 rename my_dom_id_string32 wave
 rename my_dom_id_string33 kod
 rename my_dom_id_string34 mode
 rename my_dom_id_string35 dom_id
 gen year="2023"
 expand 2, gen(dup)
-bysort state year wave kod mode dom_id: gen tab=_n
+bysort region year wave kod mode dom_id: gen tab=_n
 gen month=1 if wave=="1" & tab==1
 replace month=2 if wave=="1" & tab==2
 replace month=3 if wave=="2" & tab==1
@@ -318,7 +406,7 @@ replace month=11 if wave=="6" & tab==1
 replace month=12 if wave=="6" & tab==2
 gen month1 = string(month,"%02.0f")
 
-gen my_dom_id_string0=state+"_"+year+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
+gen my_dom_id_string0=region+"_"+year+"_"+month1+"_"+kod+"_"+mode+"_"+ dom_id
 keep my_dom_id_string0 pse
 rename pse pse_round3
 tempfile round3
@@ -336,7 +424,7 @@ drop merge*
 
 split my_dom_id_string0, parse(_)
 
-rename my_dom_id_string01 state
+rename my_dom_id_string01 region
 rename my_dom_id_string02 year
 rename my_dom_id_string03 month1
 rename my_dom_id_string04 kod
@@ -351,7 +439,7 @@ replace pse=100 if pse==.
 replace se= (pse/100)*b
 rename b dtrip 
 drop pse* dom_id
-
+drop if dtrip==0 | dtrip==.
 count
 local num=`r(N)'
 di `num'
@@ -455,7 +543,7 @@ replace dtrip_new=dtrip_new2
 drop  domain  dtrip_not tab sum_neg sum_non_neg prop mean_sum_neg adjust dtrip_new2 
 rename month1 month 
 
-sort state mode month kod draw 
+sort region mode month kod draw 
 
 tempfile new1
 save `new1'
@@ -521,7 +609,7 @@ drop draw2
 
 mvencode dtrip dtrip_new, mv(0) override
 
-*number of weekend/weekday days per state, month, and mode, and draw
+*number of weekend/weekday days per region, month, and mode, and draw
 gen tab=1
 bysort month kod mode draw:egen sum_days=sum(tab)
 order sum_days
@@ -547,26 +635,29 @@ sort day
 gen day1=day(day)
 gen month1=month(day)
 drop my_dom_id_string0
-drop state
-gen state="MA"
-gen region="MA"
+drop region
+gen region="`s'"
 
 *call the regulations file	
 do "$input_code_cd/set regulations.do"	
 
-rename day_y2 date_y2
-
+		
 preserve
-keep mode date draw dtrip state ///
-	striper_min striper_max striper_bag bluefish_min bluefish_bag  ///
-	striper_min_y2 striper_max_y2 striper_bag_y2 striper_protect_min_y2 striper_protect_max_y2 bluefish_min_y2 bluefish_bag_y2 
+keep mode date draw dtrip region ///
+	striper_min striper_max striper_bag ///
+	bluefish_min bluefish_bag  ///
+	striper_min_y2 striper_max_y2 striper_bag_y2  ///
+	bluefish_min_y2 bluefish_bag_y2 
+
+order region mode date draw dtrip
+sort  region mode date draw 
 
 compress
 export delimited using "$iterative_input_data_cd\directed_trip_draws_`s'.csv",  replace 
 restore
 
 **Now adjust for the differences in directed trips due to changes in kod between calibration year y and  y+1 
-keep mode date mode date date_y2 draw dtrip state kod kod_y2
+keep mode date date_y2 draw dtrip region kod kod_y2
 			
 gen month_y1=month(date)
 gen month_y2=month(date_y2)
@@ -625,18 +716,19 @@ destring month, replace
 compress
 drop dtrip*
 
-export delimited using "$input_data_cd\next year calendar adjustments `s'.csv",  replace 
+export delimited using "$iterative_input_data_cd\next year calendar adjustments `s'.csv",  replace 
+}
 
 
 
 ****Part C****
 *Compute totals estimates to compare with simulated calibration output
-* estimates by mode
+* estimates by region and mode 
+set seed $seed 
+
 cd $input_data_cd
 
 clear
-global fluke_effort
-
 tempfile tl1 cl1
 dsconcat $triplist
 
@@ -660,27 +752,11 @@ replace prim1_common=subinstr(lower(prim1_common)," ","",.)
 replace prim2_common=subinstr(lower(prim2_common)," ","",.)
 
 drop _merge
- 
+
 keep if $calibration_year
 
-
-/* THIS IS THE END OF THE DATA MERGING CODE */
-
- /* ensure only relevant states */
-keep if inlist(st,23, 33, 25)
-
-
- /* classify trips into dom_id=1 (DOMAIN OF INTEREST) and dom_id=2 ('OTHER' DOMAIN). */
-gen str1 dom_id="2"
-replace dom_id="1" if strmatch(common, "atlanticcod") 
-replace dom_id="1" if strmatch(prim1_common, "atlanticcod") 
-
-replace dom_id="1" if strmatch(common, "haddock") 
-replace dom_id="1" if strmatch(prim1_common, "haddock") 
-
-tostring wave, gen(w2)
-tostring year, gen(year2)
-gen st2 = string(st,"%02.0f")
+/* ensure only relevant states */
+keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37, 23, 33)
 
 gen state="MA" if st==25
 replace state="MD" if st==24
@@ -694,187 +770,82 @@ replace state="NC" if st==37
 replace state="ME" if st==23
 replace state="NH" if st==33
 
-gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
-replace mode1="pr" if inlist(mode_fx, "7")
-replace mode1="fh" if inlist(mode_fx, "4", "5")
-
-*drop shore trips
-drop if mode1=="sh"
-
-gen date=substr(id_code, 6,8)
-gen month1=substr(date, 5, 2)
-gen day1=substr(date, 7, 2)
-drop if inlist(day1,"9x", "xx") 
-destring day1, replace
-
-
-// Deal with Group Catch: 
-	// This bit of code generates a flag for each year-strat_id psu_id leader. (equal to the lowest of the dom_id)
-	// Then it generates a flag for claim equal to the largest claim.  
-	// Then it re-classifies the trip into dom_id=1 if that trip had catch of species in dom_id1 
-
-replace claim=0 if claim==.
-
-gen domain_claim=claim if inlist(common, "atlanticcod", "haddock") 
-mvencode domain_claim, mv(0) override
-
-bysort strat_id psu_id leader (dom_id): gen gc_flag=dom_id[1]
-bysort strat_id psu_id leader (domain_claim): gen claim_flag=domain_claim[_N]
-replace dom_id="1" if strmatch(dom_id,"2") & claim_flag>0 & claim_flag!=. & strmatch(gc_flag,"1")
-
-
-* generate estimation strata
-
-*New MRIP site allocations
-preserve 
-import delimited using "$input_data_cd/MRIP_COD_ALL_SITE_LIST.csv", clear 
-keep if inlist(state, "MA", "ME")
-keep state intsite nmfs_stock_area nmfs_stat_area
-sort intsite nmfs_stock_area  
-replace nmfs_stock_area="WGOM" if inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-replace nmfs_stock_area="XX" if !inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-keep nmfs_stock_area intsite nmfs_stat_area state
-duplicates drop
-tempfile mrip_sites
-save `mrip_sites', replace 
-restore
-
-merge m:1 intsite state using `mrip_sites',  keep(1 3)
-
-/*classify into WGOM or not WGOM */
-gen str3 area_s="XX"
-replace area_s="WGOM" if st2=="33"
-replace area_s=nmfs_stock_area if inlist(st2, "25", "23") 
-
-/* generate the estimation strata - year, month, kind-of-day (weekend including fed holidays/weekday), mode (pr/fh)*/
-gen my_dom_id_string=mode1+"_"+ dom_id
-replace my_dom_id_string=ltrim(rtrim(my_dom_id_string))
-
-/* total with over(<overvar>) requires a numeric variable */
-encode my_dom_id_string, gen(my_dom_id)
-
-/* keep 1 observation per year-strat-psu-id_code. This will have dom_id=1 if it targeted or caught my_common1 or my_common2. Else it will be dom_id=2*/
-bysort year wave strat_id psu_id id_code (dom_id): gen count_obs1=_n
-keep if count_obs1==1
-
-keep if dom_id=="1"
-keep if area_s=="WGOM"
-
-replace wp_int=0 if wp_int<=0
-svyset psu_id [pweight= wp_int], strata(strat_id) singleunit(certainty)
-
-
-preserve
-keep my_dom_id my_dom_id_string
-duplicates drop 
-tostring my_dom_id, gen(my_dom_id2)
-keep my_dom_id2 my_dom_id_string
-tempfile domains
-save `domains', replace 
-restore
-
-encode mode1, gen(mode2)
-
-svy: total dtrip, over(my_dom_id)  
-
-xsvmat, from(r(table)') rownames(rname) names(col) norestor
-split rname, parse("@")
-drop rname1
-split rname2, parse(.)
-drop rname2 rname22
-rename rname21 my_dom_id2
-merge 1:1 my_dom_id2 using `domains'
-drop rname my_dom_id2 _merge 
-order my_dom_id_string
-rename b dtrip 
-sort dtrip  my_dom_id
-keep dtrip se my_dom_id_string  ll ul
-replace my_dom="fh" if my_dom=="fh_1"
-replace my_dom="pr" if my_dom=="pr_1"
-rename my mode
-ds mode, not
-renvarlab `r(varlist)', postfix(_mrip)
-
-save "$input_data_cd\mrip_dtrip_by_mode.dta", replace 
-
-
-
-
-* estimates by mode and month 
-cd $input_data_cd
-
-clear
-global fluke_effort
-
-tempfile tl1 cl1
-dsconcat $triplist
-
-/*dtrip will be used to estimate total directed trips*/
-gen dtrip=1
-
-sort year strat_id psu_id id_code
-save `tl1'
-
-clear
-
-dsconcat $catchlist
-sort year strat_id psu_id id_code
-replace common=subinstr(lower(common)," ","",.)
-save `cl1'
-
-use `tl1'
-merge 1:m year strat_id psu_id id_code using `cl1', keep(1 3)
-replace common=subinstr(lower(common)," ","",.)
-replace prim1_common=subinstr(lower(prim1_common)," ","",.)
-replace prim2_common=subinstr(lower(prim2_common)," ","",.)
-
-drop _merge
- 
-keep if $calibration_year
-
-
-/* THIS IS THE END OF THE DATA MERGING CODE */
-
- /* ensure only relevant states */
-keep if inlist(st,23, 33, 25)
-
-
- /* classify trips into dom_id=1 (DOMAIN OF INTEREST) and dom_id=2 ('OTHER' DOMAIN). */
-gen str1 dom_id="2"
-replace dom_id="1" if strmatch(common, "atlanticcod") 
-replace dom_id="1" if strmatch(prim1_common, "atlanticcod") 
-
-replace dom_id="1" if strmatch(common, "haddock") 
-replace dom_id="1" if strmatch(prim1_common, "haddock") 
-
 tostring wave, gen(w2)
 tostring year, gen(year2)
 gen st2 = string(st,"%02.0f")
 
-gen state="MA" if st==25
-replace state="MD" if st==24
-replace state="RI" if st==44
-replace state="CT" if st==9
-replace state="NY" if st==36
-replace state="NJ" if st==34
-replace state="DE" if st==10
-replace state="VA" if st==51
-replace state="NC" if st==37
-replace state="ME" if st==23
-replace state="NH" if st==33
-
 gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
 replace mode1="pr" if inlist(mode_fx, "7")
 replace mode1="fh" if inlist(mode_fx, "4", "5")
-
-*drop shore trips
-drop if mode1=="sh"
 
 gen date=substr(id_code, 6,8)
 gen month1=substr(date, 5, 2)
 gen day1=substr(date, 7, 2)
 drop if inlist(day1,"9x", "xx") 
 destring day1, replace
+destring month, replace
+gen date2=dmy(day1, month, year)
+format date2 %td
+
+*keep if inlist(state, "DE", "NC", "NY", "VA")
+*keep if inlist(state, "DE")
+
+preserve
+import excel using "$input_data_cd/SB_MRIP_Management_Areas_DE_NC_NY_VA_reformat.xlsx", clear firstrow
+duplicates drop 
+drop if intsite==483 & state=="NC" & mgt=="CENTRAL SOUTHERN"
+tempfile sites
+save `sites', replace
+restore
+merge m:1 state intsite using `sites', keep(1 3)
+
+*browse if _merge==1
+replace mgt = "DE_RIVER_BAY_PRIMARY_AREA" if mgt=="" & state=="DE" & inlist(intsite, 65, 73, 106) 
+replace mgt= "CHESAPEAKE BAY" if mgt=="" & state=="VA" & inlist(intsite, 212, 995) 
+
+
+*rename mgt areas 
+replace mgt="ALB"  if mgt=="ALBEMARLE SOUND" 
+replace mgt="OCN"  if mgt=="ATLANTIC OCEAN" 
+replace mgt="CNTRL"  if mgt=="CENTRAL SOUTHERN" 
+replace mgt="CHES"  if mgt=="CHESAPEAKE BAY" 
+replace mgt="NANT"  if mgt=="DE_NATICOKE_RIVER_SPAWNING_AREA" 
+replace mgt="DERIV"  if mgt=="DE_RIVER_BAY_PRIMARY_AREA" 
+replace mgt="HUDN"  if mgt=="HUDSON_NORTH_OF_GW_BRIDGE" 
+replace mgt="HUDS"  if mgt=="MARINE_AND_SOUTH_OF_GW_BRIDGE" 
+replace mgt="POTO"  if mgt=="POTOMAC RIVER TRIBUTARIES" 
+
+replace mgt="OCN" if state=="DE" & area=="1"
+
+
+**Deal with Maryland**
+
+* First, identify Potomac River sites. 
+* There are a handful of sites along the Potomoac River, but near a striper-regs-map mgt. area
+* If a trip is a boat trip, classify it as POT
+* If a trip is a shore, classify it as CHES, unless it is one of the few sites where a shore trip would likely be fishing in the POT
+replace mgt="POT" if state=="MD" & inlist(intsite, 788, 1969, 1865, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "pr", "fh")
+replace mgt="POT" if state=="MD" & inlist(intsite, 1865) & inlist(mode1, "sh")
+replace mgt="CHES" if state=="MD" & inlist(intsite, 788, 1969, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "sh")
+
+* Next, MD coastal sites
+replace mgt="OCN"  if state=="MD" & inlist(intsite,3097, 853, 4419, 24, 856, 1493, 858, 860,  906, 4349, 1658, 152, 1183, 3442)
+
+* Lastly, merge MD march-may sites to regulation region site list 
+replace mgt="CHES" if state=="MD"  & mgt==""
+
+
+replace mgt="ALL" if mgt==""
+
+drop region
+gen region=state+mgt
+
+gen str1 dom_id="2"
+replace dom_id="1" if strmatch(common, "stripedbass") 
+replace dom_id="1" if strmatch(prim1_common, "stripedbass") 
+
+replace dom_id="1" if strmatch(common, "bluefish") 
+replace dom_id="1" if strmatch(prim1_common, "bluefish") 
 
 
 // Deal with Group Catch: 
@@ -884,65 +855,34 @@ destring day1, replace
 
 replace claim=0 if claim==.
 
-gen domain_claim=claim if inlist(common, "atlanticcod", "haddock") 
+gen domain_claim=claim if inlist(common, "stripedbass", "bluefish") 
+
 mvencode domain_claim, mv(0) override
 
 bysort strat_id psu_id leader (dom_id): gen gc_flag=dom_id[1]
 bysort strat_id psu_id leader (domain_claim): gen claim_flag=domain_claim[_N]
 replace dom_id="1" if strmatch(dom_id,"2") & claim_flag>0 & claim_flag!=. & strmatch(gc_flag,"1")
 
-
-* generate estimation strata
-
-*New MRIP site allocations
-preserve 
-import delimited using "$input_data_cd/MRIP_COD_ALL_SITE_LIST.csv", clear 
-keep if inlist(state, "MA", "ME")
-keep state intsite nmfs_stock_area nmfs_stat_area
-sort intsite nmfs_stock_area  
-replace nmfs_stock_area="WGOM" if inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-replace nmfs_stock_area="XX" if !inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-keep nmfs_stock_area intsite nmfs_stat_area state
-duplicates drop
-tempfile mrip_sites
-save `mrip_sites', replace 
-restore
-
-merge m:1 intsite state using `mrip_sites',  keep(1 3)
-
-/*classify into WGOM or not WGOM */
-gen str3 area_s="XX"
-replace area_s="WGOM" if st2=="33"
-replace area_s=nmfs_stock_area if inlist(st2, "25", "23") 
-
-/* generate the estimation strata - year, month, kind-of-day (weekend including fed holidays/weekday), mode (pr/fh)*/
-gen my_dom_id_string=month+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string=region+"_"+mode1+"_"+ dom_id
 replace my_dom_id_string=ltrim(rtrim(my_dom_id_string))
 
-/* total with over(<overvar>) requires a numeric variable */
 encode my_dom_id_string, gen(my_dom_id)
 
 /* keep 1 observation per year-strat-psu-id_code. This will have dom_id=1 if it targeted or caught my_common1 or my_common2. Else it will be dom_id=2*/
 bysort year wave strat_id psu_id id_code (dom_id): gen count_obs1=_n
 keep if count_obs1==1
 
-keep if dom_id=="1"
-keep if area_s=="WGOM"
-
 replace wp_int=0 if wp_int<=0
 svyset psu_id [pweight= wp_int], strata(strat_id) singleunit(certainty)
-
 
 preserve
 keep my_dom_id my_dom_id_string
 duplicates drop 
-tostring my_dom_id, gen(my_dom_id2)
-keep my_dom_id2 my_dom_id_string
 tempfile domains
 save `domains', replace 
 restore
 
-encode mode1, gen(mode2)
+
 
 svy: total dtrip, over(my_dom_id)  
 
@@ -951,30 +891,31 @@ split rname, parse("@")
 drop rname1
 split rname2, parse(.)
 drop rname2 rname22
-rename rname21 my_dom_id2
-merge 1:1 my_dom_id2 using `domains'
-drop rname my_dom_id2 _merge 
+rename rname21 my_dom_id
+destring my_dom_id, replace
+merge 1:1 my_dom_id using `domains'
+drop rname my_dom_id _merge 
 order my_dom_id_string
-rename b dtrip 
-sort dtrip  my_dom_id
-keep dtrip se my_dom_id_string ll ul
+
 split my, parse(_)
-rename my_dom_id_string1 month 
+rename my_dom_id_string1 region
 rename my_dom_id_string2 mode
-drop  my_dom_id_string3
-drop my
-ds month mode, not
-renvarlab `r(varlist)', postfix(_mrip)
+rename my_dom_id_string3 common_dom
 
-save "$input_data_cd\mrip_dtrip_by_mode_month.dta", replace 
+keep if common=="1"
+keep region mode b se  ll ul
+rename b dtrip 
+renvarlab dtrip se ll ul, postfix(_mrip)
+
+save "$input_data_cd\mrip_dtrip_by_state_mode.dta", replace 
 
 
-* estimates by mode and summer/winter season
+*estimates by state mode month 
+set seed $seed 
+
 cd $input_data_cd
 
 clear
-global fluke_effort
-
 tempfile tl1 cl1
 dsconcat $triplist
 
@@ -998,27 +939,11 @@ replace prim1_common=subinstr(lower(prim1_common)," ","",.)
 replace prim2_common=subinstr(lower(prim2_common)," ","",.)
 
 drop _merge
- 
+
 keep if $calibration_year
 
-
-/* THIS IS THE END OF THE DATA MERGING CODE */
-
- /* ensure only relevant states */
-keep if inlist(st,23, 33, 25)
-
-
- /* classify trips into dom_id=1 (DOMAIN OF INTEREST) and dom_id=2 ('OTHER' DOMAIN). */
-gen str1 dom_id="2"
-replace dom_id="1" if strmatch(common, "atlanticcod") 
-replace dom_id="1" if strmatch(prim1_common, "atlanticcod") 
-
-replace dom_id="1" if strmatch(common, "haddock") 
-replace dom_id="1" if strmatch(prim1_common, "haddock") 
-
-tostring wave, gen(w2)
-tostring year, gen(year2)
-gen st2 = string(st,"%02.0f")
+/* ensure only relevant states */
+keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37, 23, 33)
 
 gen state="MA" if st==25
 replace state="MD" if st==24
@@ -1032,19 +957,82 @@ replace state="NC" if st==37
 replace state="ME" if st==23
 replace state="NH" if st==33
 
+tostring wave, gen(w2)
+tostring year, gen(year2)
+gen st2 = string(st,"%02.0f")
+
 gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
 replace mode1="pr" if inlist(mode_fx, "7")
 replace mode1="fh" if inlist(mode_fx, "4", "5")
-
-*drop shore trips
-drop if mode1=="sh"
 
 gen date=substr(id_code, 6,8)
 gen month1=substr(date, 5, 2)
 gen day1=substr(date, 7, 2)
 drop if inlist(day1,"9x", "xx") 
 destring day1, replace
+destring month, replace
+gen date2=dmy(day1, month, year)
+format date2 %td
 
+*keep if inlist(state, "DE", "NC", "NY", "VA")
+*keep if inlist(state, "DE")
+
+preserve
+import excel using "$input_data_cd/SB_MRIP_Management_Areas_DE_NC_NY_VA_reformat.xlsx", clear firstrow
+duplicates drop 
+drop if intsite==483 & state=="NC" & mgt=="CENTRAL SOUTHERN"
+tempfile sites
+save `sites', replace
+restore
+merge m:1 state intsite using `sites', keep(1 3)
+
+*browse if _merge==1
+replace mgt = "DE_RIVER_BAY_PRIMARY_AREA" if mgt=="" & state=="DE" & inlist(intsite, 65, 73, 106) 
+replace mgt= "CHESAPEAKE BAY" if mgt=="" & state=="VA" & inlist(intsite, 212, 995) 
+
+
+*rename mgt areas 
+replace mgt="ALB"  if mgt=="ALBEMARLE SOUND" 
+replace mgt="OCN"  if mgt=="ATLANTIC OCEAN" 
+replace mgt="CNTRL"  if mgt=="CENTRAL SOUTHERN" 
+replace mgt="CHES"  if mgt=="CHESAPEAKE BAY" 
+replace mgt="NANT"  if mgt=="DE_NATICOKE_RIVER_SPAWNING_AREA" 
+replace mgt="DERIV"  if mgt=="DE_RIVER_BAY_PRIMARY_AREA" 
+replace mgt="HUDN"  if mgt=="HUDSON_NORTH_OF_GW_BRIDGE" 
+replace mgt="HUDS"  if mgt=="MARINE_AND_SOUTH_OF_GW_BRIDGE" 
+replace mgt="POTO"  if mgt=="POTOMAC RIVER TRIBUTARIES" 
+
+replace mgt="OCN" if state=="DE" & area=="1"
+
+
+**Deal with Maryland**
+
+* First, identify Potomac River sites. 
+* There are a handful of sites along the Potomoac River, but near a striper-regs-map mgt. area
+* If a trip is a boat trip, classify it as POT
+* If a trip is a shore, classify it as CHES, unless it is one of the few sites where a shore trip would likely be fishing in the POT
+replace mgt="POT" if state=="MD" & inlist(intsite, 788, 1969, 1865, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "pr", "fh")
+replace mgt="POT" if state=="MD" & inlist(intsite, 1865) & inlist(mode1, "sh")
+replace mgt="CHES" if state=="MD" & inlist(intsite, 788, 1969, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "sh")
+
+* Next, MD coastal sites
+replace mgt="OCN"  if state=="MD" & inlist(intsite,3097, 853, 4419, 24, 856, 1493, 858, 860,  906, 4349, 1658, 152, 1183, 3442)
+
+* Lastly, merge MD march-may sites to regulation region site list 
+replace mgt="CHES" if state=="MD"  & mgt==""
+
+
+replace mgt="ALL" if mgt==""
+
+drop region
+gen region=state+mgt
+
+gen str1 dom_id="2"
+replace dom_id="1" if strmatch(common, "stripedbass") 
+replace dom_id="1" if strmatch(prim1_common, "stripedbass") 
+
+replace dom_id="1" if strmatch(common, "bluefish") 
+replace dom_id="1" if strmatch(prim1_common, "bluefish") 
 
 // Deal with Group Catch: 
 	// This bit of code generates a flag for each year-strat_id psu_id leader. (equal to the lowest of the dom_id)
@@ -1053,68 +1041,32 @@ destring day1, replace
 
 replace claim=0 if claim==.
 
-gen domain_claim=claim if inlist(common, "atlanticcod", "haddock") 
+gen domain_claim=claim if inlist(common, "stripedbass", "bluefish") 
+
 mvencode domain_claim, mv(0) override
 
 bysort strat_id psu_id leader (dom_id): gen gc_flag=dom_id[1]
 bysort strat_id psu_id leader (domain_claim): gen claim_flag=domain_claim[_N]
 replace dom_id="1" if strmatch(dom_id,"2") & claim_flag>0 & claim_flag!=. & strmatch(gc_flag,"1")
 
-
-* generate estimation strata
-
-*New MRIP site allocations
-preserve 
-import delimited using "$input_data_cd/MRIP_COD_ALL_SITE_LIST.csv", clear 
-keep if inlist(state, "MA", "ME")
-keep state intsite nmfs_stock_area nmfs_stat_area
-sort intsite nmfs_stock_area  
-replace nmfs_stock_area="WGOM" if inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-replace nmfs_stock_area="XX" if !inlist(nmfs_stat_area, 521, 526, 541, 514, 513, 515)
-keep nmfs_stock_area intsite nmfs_stat_area state
-duplicates drop
-tempfile mrip_sites
-save `mrip_sites', replace 
-restore
-
-merge m:1 intsite state using `mrip_sites',  keep(1 3)
-
-/*classify into WGOM or not WGOM */
-gen str3 area_s="XX"
-replace area_s="WGOM" if st2=="33"
-replace area_s=nmfs_stock_area if inlist(st2, "25", "23") 
-
-gen season= "winter" if inlist(month, "09", "10", "11", "12", "01", "02", "03", "04")
-replace season="summer" if inlist(month, "05", "06", "07", "08")
-
-/* generate the estimation strata - year, month, kind-of-day (weekend including fed holidays/weekday), mode (pr/fh)*/
-gen my_dom_id_string=season+"_"+mode1+"_"+ dom_id
+gen my_dom_id_string=region+"_"+mode1+"_"+ dom_id+"_"+month1
 replace my_dom_id_string=ltrim(rtrim(my_dom_id_string))
 
-/* total with over(<overvar>) requires a numeric variable */
 encode my_dom_id_string, gen(my_dom_id)
 
 /* keep 1 observation per year-strat-psu-id_code. This will have dom_id=1 if it targeted or caught my_common1 or my_common2. Else it will be dom_id=2*/
 bysort year wave strat_id psu_id id_code (dom_id): gen count_obs1=_n
 keep if count_obs1==1
 
-keep if dom_id=="1"
-keep if area_s=="WGOM"
-
 replace wp_int=0 if wp_int<=0
 svyset psu_id [pweight= wp_int], strata(strat_id) singleunit(certainty)
-
 
 preserve
 keep my_dom_id my_dom_id_string
 duplicates drop 
-tostring my_dom_id, gen(my_dom_id2)
-keep my_dom_id2 my_dom_id_string
 tempfile domains
 save `domains', replace 
 restore
-
-encode mode1, gen(mode2)
 
 svy: total dtrip, over(my_dom_id)  
 
@@ -1123,24 +1075,23 @@ split rname, parse("@")
 drop rname1
 split rname2, parse(.)
 drop rname2 rname22
-rename rname21 my_dom_id2
-merge 1:1 my_dom_id2 using `domains'
-drop rname my_dom_id2 _merge 
+rename rname21 my_dom_id
+destring my_dom_id, replace
+merge 1:1 my_dom_id using `domains'
+drop rname my_dom_id _merge 
 order my_dom_id_string
-rename b dtrip 
-sort dtrip  my_dom_id
-keep dtrip se my_dom_id_string ll ul
+
 split my, parse(_)
-rename my_dom_id_string1 season 
+rename my_dom_id_string1 region
 rename my_dom_id_string2 mode
-drop  my_dom_id_string3
-drop my
-ds season mode, not
-renvarlab `r(varlist)', postfix(_mrip)
+rename my_dom_id_string3 common_dom
+rename my_dom_id_string4 month
 
-save "$input_data_cd\mrip_dtrip_by_mode_season.dta", replace 
+keep if common=="1"
+keep region mode b se  ll ul month
+rename b dtrip 
+renvarlab dtrip se ll ul, postfix(_mrip)
 
-
-
+save "$input_data_cd\mrip_dtrip_by_region_mode_month.dta", replace 
 
 
