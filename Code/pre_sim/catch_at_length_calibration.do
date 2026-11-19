@@ -13,6 +13,9 @@ set seed $seed
 * Tony has already compiled bluefish discard length data used in the assessment. 
 
 import delimited using "$length_data_cd/BLF_RECDISCLEN_2022_2024.csv", clear 
+
+drop if state=="FL"
+
 keep if year==2023
 *replace length = length/2.54
 *replace length = round(length)
@@ -27,7 +30,7 @@ replace season = "fall" if inlist(month, 7, 8, 9 , 10, 11, 12)
 replace season = "spr" if season=="" &  inlist(wave, 1, 2, 3)
 replace season = "fall" if season==""& inlist(wave, 4, 5, 6)
 
-collapse (sum) number, by(region length)
+collapse (sum) number, by(region length season)
 
 /*
 su number if region=="N"
@@ -92,11 +95,9 @@ replace state="ME" if st==23
 replace state="NH" if st==33
 
 
-keep if inlist(year, 2023) 
-*$calibration_year //ensure relevent year
+keep if $calibration_year //ensure relevent year
  
 gen st2 = string(st,"%02.0f")
-
 
 gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
 replace mode1="pr" if inlist(mode_fx, "7")
@@ -142,10 +143,7 @@ encode my_dom_id_string, gen(my_dom_id)
 
 svyset psu_id [pweight= wp_size], strata(var_id) singleunit(certainty)
 
-
-
 svy: tab l_cm my_dom_id_string, count
-*svy: tab l_in my_dom_id_string, count
 
 mat eP=e(Prop)
 mat eR=e(Row)'
@@ -182,6 +180,7 @@ keep if species=="blu"
 egen sum=sum(nfish_ab1), by(region)
 gen prop_ab1=nfish_ab1/sum
 drop sum nfish_ab1
+
 * merge harvest lengths to discards lengths
 merge 1:1 l_cm_bin species region using `blue_b2'
 mvencode prop*, mv(0) override
@@ -190,22 +189,6 @@ sort region  l
 
 expand $ndraws
 bysort  l region: gen draw=_n
-
-/*
-expand 9
-bysort species draw l: gen tab=_n
-gen state="MA" if tab==1
-replace state="RI" if tab==2
-replace state="CT" if tab==3
-replace state="NY" if tab==4
-replace state="NJ" if tab==5
-replace state="DE" if tab==6
-replace state="MD" if tab==7
-replace state="VA" if tab==8
-replace state="NC" if tab==9
-drop tab
-*/
-
 
 preserve
 u "$iterative_input_data_cd\simulated_catch_totals_for_length_distn.dta", clear 
@@ -250,9 +233,7 @@ restore
 
 
 * Estimate gamma parameters for each distribution
-* note: I restrict the range of fitted values to within the min/max length of observed catch
 * new code using MOM to avoid non-convergence 
-
 
 rename catch_at_length  n_fish
 
@@ -275,11 +256,6 @@ foreach r of local regs {
 	local tot_n_fish=`r(sum)'
     * Gamma needs strictly positive support
     drop if length<=0
-
-    * observed range (weighted or unweighted; here unweighted over remaining bins)
-    quietly summarize length
-    local minL = r(min)
-    local maxL = r(max)
 
     * --------
     * (A) Estimate gamma parameters robustly (MOM with freq weights)
@@ -318,9 +294,6 @@ foreach r of local regs {
     gen double gammafit = rgamma(`alpha', `beta')
     replace gammafit = round(gammafit)
 
-    * truncate to observed range
-    keep if gammafit>=`minL' & gammafit<=`maxL'
-
     gen nfish = 1
     collapse (sum) nfish, by(gammafit)
     egen sumnfish = total(nfish)
@@ -352,13 +325,33 @@ replace draw=domain3
 sort species   draw fitted_length
 drop _merge domain1 domain2 domain3 
 
-keep fitted_length fitted_prob draw  species  observed_prob region
+keep fitted_length fitted_prob draw  species  observed_prob region catch_at_length
 order draw  species fitted_length fitted_prob observed_prob	
 rename fitted_length length 
-sort species   draw length
+sort species draw length
 
+gen domain=region+"_"+species
 
-****
+levelsof domain, local(doms)
+foreach d of local doms{
+quietly summarize length if observed_prob!=0 & !missing(observed_prob) & domain=="`d'"
+return list
+local minL = `r(min)'
+local maxL = `r(max)'
+drop if (length<`minL' | length>`maxL' ) & domain=="`d'"
+}
+
+egen sum_fitted_prob=sum(fitted_prob), by(domain draw)
+replace fitted_prob=fitted_prob/sum_fitted_prob
+sort species region draw length
+order species region draw length obs fitted 
+drop domain sum
+
+*save tempfile of probablites by data region before expanding to mgt. region 
+tempfile bluefish_data_region
+save `bluefish_data_region', replace
+
+/****
 levelsof draw , local(draws)
 
 * Initialize an empty plot command
@@ -402,7 +395,7 @@ twoway `plots', ///
 	legend(order(1 "ME-NY" 2 "NJ-NC"  ) position(6) cols(2) )
 	
 *export delimited using "$input_data_cd/baseline_catch_at_length.csv", replace 
-
+*/
 
 * expand to management regions
 expand 12 if region == "S"	
@@ -451,9 +444,14 @@ save `bluefish', replace
 import delimited using "$length_data_cd/SB_deadB2_LFs_2023_formatted.csv", clear 
 *translate inches to cms
 replace length=length*2.54
+replace waters="N" if inlist(waters, "ME", "NH", "MA", "RI", "CT", "NY")
+replace waters="S" if inlist(waters, "NJ", "DE", "MD", "VA", "NC")
+replace waters="CHES" if waters=="CHES"
+drop if waters=="CSTL"
 replace length=round(length)
 collapse (sum) nfish, by(length waters)
 sort waters leng
+
 
 egen sum=sum(nfish), by(waters)
 gen prop_b2=nfish/sum
@@ -572,8 +570,8 @@ replace mgt="ALL" if mgt==""
 
 * create strata for CHES. vs non-CHES
 gen waters="CHES" if inlist(mgt, "CHES")
-replace waters="CSTL"  if !inlist(mgt, "CHES")
-
+replace waters="N"  if !inlist(mgt, "CHES")  & inlist(state, "ME", "NH", "MA", "RI", "CT", "NY")
+replace waters="S" if !inlist(mgt, "CHES")  & inlist(state, "NJ", "DE", "MD", "VA", "NC")
 
 keep if $calibration_year //ensure relevent year
  
@@ -585,18 +583,55 @@ replace common_dom="b" if strmatch(sp_code,"8835250101")
 
 
 * this might speed things up if I re-classify all length=0 for the species I don't care about 
-*replace l_cm_bin =0 if !inlist(common_dom, "s", "b")
+replace l_cm_bin =0 if !inlist(common_dom, "s", "b")
 replace l_in_bin =0 if !inlist(common_dom, "s", "b")
 
 sort year  strat_id psu_id id_code
 
 drop if common_dom=="z"
+preserve
+svyset psu_id [pweight= wp_int], strata(strat_id) singleunit(certainty)
+
+keep if inlist(common_dom, "s", "b")
+replace wgt=wgt* 2.20462
+gen ln_wt = ln(wgt)
+gen ln_len = ln(l_in_bin)
+
+gen lw_region = ""
+replace lw_region = "north" if inlist(state, "ME", "NH", "MA", "RI", "CT", "NY")
+replace lw_region = "south" if inlist(state, "NJ", "DE", "MD", "VA", "NC")
+
+gen species="str" if common_dom=="s"
+replace species="blu" if common_dom=="b"
+postfile lw str20 species str10 lw_region double alpha beta sigma2 using "$input_data_cd/mrip_lw_params.dta", replace
+
+levelsof species, local(species)
+levelsof lw_region, local(regions)
+
+foreach sp of local species {
+    foreach r of local regions {
+        quietly count if species == "`sp'" & lw_region == "`r'"
+        if r(N) >= 30 {
+            svy: reg ln_wt ln_len if species == "`sp'" & lw_region == "`r'"
+			predict resid, resid
+			gen resid2 = resid^2
+			sum resid2 [aw = wp_int]
+			local sigma2 = r(mean)
+			drop resid resid2 
+            post lw ("`sp'") ("`r'") (_b[_cons]) (_b[ln_len]) (`sigma2')
+        }
+    }
+}
+
+postclose lw
+restore 
 
 
+/*
 drop region
 gen region="N" if inlist(state, "ME", "NH", "MA", "RI", "CT", "NY")
 replace region="S" if inlist(state, "NJ", "DE", "MD", "VA", "NC")
-
+*/
 gen my_dom_id_string=waters+"_"+common_dom
 replace my_dom_id_string=subinstr(ltrim(rtrim(my_dom_id_string))," ","",.)
 encode my_dom_id_string, gen(my_dom_id)
@@ -638,9 +673,11 @@ drop new
 rename tab nfish_ab1	
 sort waters species l_cm_bin
 keep if species=="str"
+
 egen sum=sum(nfish_ab1), by(waters)
 gen prop_ab1=nfish_ab1/sum
 drop sum nfish_ab1
+
 * merge harvest lengths to discards lengths
 merge 1:1 l_cm_bin species waters using `striper_b2'
 mvencode prop*, mv(0) override
@@ -651,25 +688,11 @@ expand $ndraws
 bysort species l waters: gen draw=_n
 sort species waters draw l
 
-
-/*
-expand 9
-bysort species draw l: gen tab=_n
-gen state="MA" if tab==1
-replace state="RI" if tab==2
-replace state="CT" if tab==3
-replace state="NY" if tab==4
-replace state="NJ" if tab==5
-replace state="DE" if tab==6
-replace state="MD" if tab==7
-replace state="VA" if tab==8
-replace state="NC" if tab==9
-drop tab
-*/
-
-
 preserve
 u "$iterative_input_data_cd\simulated_catch_totals_for_length_distn.dta", clear 
+replace waters=state if waters!="CHES"
+replace waters="N"  if !inlist(waters, "CHES")  & inlist(state, "ME", "NH", "MA", "RI", "CT", "NY")
+replace waters="S" if !inlist(waters, "CHES")  & inlist(state, "NJ", "DE", "MD", "VA", "NC")
 collapse (sum) tot_str_keep_sim tot_str_rel_sim, by(waters draw)
 keep if draw<=$ndraws
 
@@ -681,18 +704,21 @@ merge m:1 waters draw using `regional_total_str'
 keep if draw<=$ndraws
 drop _merge
 
-
 gen ab1=prop_ab1*tot_str_keep_sim
 gen b2=prop_b2*tot_str_rel_sim
 
 gen catch_at_length=ab1+b2
-collapse (sum) catch_at_length, by(waters species l_cm draw)
+collapse (sum) catch_at_length ab1 b2, by(waters species l_cm draw)
 sort waters spec draw l_c
-
 
 egen sumfish=sum(catch_at_length), by(waters species draw)
 gen observed_prob=catch_at_length/sum
 drop sumfish
+
+egen sumfish=sum(ab1), by(waters species draw)
+gen observed_prob_ab1=ab1/sum
+drop sumfish
+
 tostring draw, gen(draw1)
 gen domain = waters+"_"+species+"_"+draw1
 
@@ -702,7 +728,7 @@ sort waters spec draw length
 
 preserve 
 rename length fitted_length
-keep fitted_length observed_prob catch_at_length species draw domain waters
+keep fitted_length observed_prob* catch_at_length species draw domain waters catch_at_length
 duplicates drop
 tempfile observed_prob
 save `observed_prob', replace
@@ -710,7 +736,6 @@ restore
 
 
 * Estimate gamma parameters for each distribution
-* note: I restrict the range of fitted values to within the min/max length of observed catch
 * new code using MOM to avoid non-convergence 
 
 
@@ -735,11 +760,6 @@ foreach r of local regs {
 	local tot_n_fish=`r(sum)'
     * Gamma needs strictly positive support
     drop if length<=0
-
-    * observed range (weighted or unweighted; here unweighted over remaining bins)
-    quietly summarize length
-    local minL = r(min)
-    local maxL = r(max)
 
     * --------
     * (A) Estimate gamma parameters robustly (MOM with freq weights)
@@ -776,9 +796,6 @@ foreach r of local regs {
     gen double gammafit = rgamma(`alpha', `beta')
     replace gammafit = round(gammafit)
 
-    * truncate to observed range
-    keep if gammafit>=`minL' & gammafit<=`maxL'
-
     * If rejection killed everything, try again with more draws (once)
     if _N==0 {
         clear
@@ -806,11 +823,10 @@ rename gammafit fitted_length
 
 merge 1:1 fitted_length domain using `observed_prob'
 
-
 sort domain fitted_length 
 sort  fitted_length draw
 
-mvencode fitted_prob observed_prob, mv(0) override 
+mvencode fitted_prob* observed_prob, mv(0) override 
 
 split domain, parse(_)
 replace waters=domain1
@@ -820,20 +836,45 @@ replace draw=domain3
 sort species  draw fitted_length
 drop _merge domain1 domain2 domain3
 
-keep fitted_length fitted_prob draw  species observed_prob waters
+keep fitted_length fitted_prob* draw  species observed_prob waters catch_at_length
 order draw  species fitted_length fitted_prob observed_prob	
 rename fitted_length length 
 sort species waters draw length
 
+*truncate to observed range of catch lengths
+gen domain=waters+"_"+species
+
+levelsof domain, local(doms)
+foreach d of local doms{
+quietly summarize length if observed_prob!=0 & !missing(observed_prob) & domain=="`d'"
+return list
+local minL = `r(min)'
+local maxL = `r(max)'
+drop if (length<`minL' | length>`maxL' ) & domain=="`d'"
+}
+
+egen sum_fitted_prob=sum(fitted_prob), by(domain draw)
+replace fitted_prob=fitted_prob/sum_fitted_prob
+sort species waters draw length
+order species waters draw length obs fitted 
+drop domain sum
+
+preserve
+append using `bluefish_data_region'
+export delimited using "$input_data_cd/baseline_catch_at_length_data_rgns.csv", replace 
+restore
 
 ****
+/*
 levelsof draw , local(draws)
 
 * Initialize an empty plot command
 local plots
 foreach d of local draws {
     local plots `plots' ///
-		(line fitted_prob length if draw==`d' & waters=="CSTL", ///
+		(line fitted_prob length if draw==`d' & waters=="N", ///
+        lcolor(blue) lwidth(thin) lpattern(solid)) ///
+		(line fitted_prob length if draw==`d' & waters=="S", ///
         lcolor(red) lwidth(thin) lpattern(solid)) ///
 		(line fitted_prob length if draw==`d' & waters=="CHES" , ///
         lcolor(green) lwidth(thin) lpattern(solid) ) 
@@ -845,9 +886,9 @@ twoway `plots', ///
 	xlabel(#20, labsize(small)) ///
     title("Fitted catch-at-length probabilities by length (Striped bass)", size(medium)) ///
     ytitle("Probability", size(medium)) xtitle("Length (cm)", size(medium))  ///
-	legend(order(1 "Coastal" 2 "Chesapeake"  ) position(6) cols(2) )
+	legend(order(1 "MA-NY" 2 "NJ-NC" 3 "Chesapeake Bay" ) position(6) cols(3) )
 
-	
+*/
 * expand to management regions
 expand 2 if waters == "CHES"	
 bysort draw species length water: gen tab=_n
@@ -855,27 +896,34 @@ gen region="MDCHES" if water=="CHES" & tab==1
 replace region="VACHES" if water=="CHES" & tab==2
 
 drop tab
-expand 18 if waters == "CSTL"	 
+expand 7 if waters == "N"	 
 bysort draw species length water: gen tab=_n
 
-replace region="CTALL" if water=="CSTL" & tab==1
-replace region="DEDERIV" if water=="CSTL" & tab==2
-replace region="DENANT" if water=="CSTL" & tab==3
-replace region="DEOCN" if water=="CSTL" & tab==4
-replace region="MAALL" if water=="CSTL" & tab==5
-replace region="MDOCN" if water=="CSTL" & tab==6
-replace region="MDPOT" if water=="CSTL" & tab==7
-replace region="MEALL" if water=="CSTL" & tab==8
-replace region="NCALB" if water=="CSTL" & tab==9
-replace region="NCCNTRL" if water=="CSTL" & tab==10
-replace region="NCOCN" if water=="CSTL" & tab==11
-replace region="NHALL" if water=="CSTL" & tab==12
-replace region="NJALL" if water=="CSTL" & tab==13
-replace region="NYHUDN" if water=="CSTL" & tab==14
-replace region="NYHUDS" if water=="CSTL" & tab==15
-replace region="RIALL" if water=="CSTL" & tab==16
-replace region="VAOCN" if water=="CSTL" & tab==17
-replace region="VAPOTO" if water=="CSTL" & tab==18
+*north
+replace region="CTALL" if water=="N" & tab==1
+replace region="MAALL" if water=="N" & tab==2
+replace region="MEALL" if water=="N" & tab==3
+replace region="NHALL" if water=="N" & tab==4
+replace region="NYHUDN" if water=="N" & tab==5
+replace region="NYHUDS" if water=="N" & tab==6
+replace region="RIALL" if water=="N" & tab==7
+
+drop tab
+expand 11 if waters == "S"	 
+bysort draw species length water: gen tab=_n
+
+*South
+replace region="DEDERIV" if water=="S" & tab==1
+replace region="DENANT" if water=="S" & tab==2
+replace region="DEOCN" if water=="S" & tab==3
+replace region="MDOCN" if water=="S" & tab==4
+replace region="MDPOT" if water=="S" & tab==5
+replace region="NCALB" if water=="S" & tab==6
+replace region="NCCNTRL" if water=="S" & tab==7
+replace region="NCOCN" if water=="S" & tab==8
+replace region="NJALL" if water=="S" & tab==9
+replace region="VAOCN" if water=="S" & tab==10
+replace region="VAPOTO" if water=="S" & tab==11
 drop tab 
 	
 append using `bluefish'	
@@ -884,15 +932,16 @@ order region  species draw length
 sort  region species draw length 
 
 ****
+/*
 levelsof draw , local(draws)
 
 * Initialize an empty plot command
 local plots
 foreach d of local draws {
     local plots `plots' ///
-		(line fitted_prob length if draw==`d' & species=="str" & region=="CTALL", ///
+		(line fitted_prob_ab1 length if draw==`d' & species=="str" & region=="CTALL", ///
         lcolor(red) lwidth(thin) lpattern(solid)) ///
-		(line observed_prob length if draw==`d' & species=="str" & region=="CTALL", ///
+		(line fitted_prob_b2 length if draw==`d' & species=="str" & region=="CTALL", ///
         lcolor(green) lwidth(thin) lpattern(solid) ) 
 }
 
@@ -902,6 +951,31 @@ twoway `plots', ///
 	xlabel(#20, labsize(small)) ///
     title("Fitted catch-at-length probabilities by length (Striped bass)", size(medium)) ///
     ytitle("Probability", size(medium)) xtitle("Length (cm)", size(medium))  ///
-	legend(order(1 "Coastal" 2 "Chesapeake"  ) position(6) cols(2) )
-
+	legend(order(1 "Fitted" 2 "Observed"  ) position(6) cols(2) )
+*/
 export delimited using "$input_data_cd/baseline_catch_at_length.csv", replace 
+
+import delimited using "$input_data_cd/baseline_catch_at_length.csv", clear 
+gen n_regions="three"
+tempfile base 
+save `base', replace
+
+
+import delimited using "$input_data_cd/baseline_catch_at_length_one_region.csv", clear 
+gen n_regions="one"
+append using `base'
+
+
+collapse (mean) fitted_prob, by(region species length n_regions)
+twoway (line fitted_prob length if species=="str" & region=="CTALL" & n_regions=="three", lcolor(red) lwidth(thin) lpattern(solid)) ///
+			(line fitted_prob length if species=="str" & region=="MDCHES" & n_regions=="three", lcolor(blue) lwidth(thin) lpattern(solid)) ///
+			(line fitted_prob length if species=="str" & region=="NJALL" & n_regions=="three", lcolor(green) lwidth(thin) lpattern(solid)) ///
+			(line fitted_prob length if species=="str" & region=="NJALL" & n_regions=="one", lcolor(black) lwidth(thin) lpattern(solid) ///
+			legend(order(1 "N" 2 "Ches" 3 "S" 4 "NS") position(6) cols(3) ))
+			
+twoway (line fitted_prob length if species=="blu" & region=="CTALL" & n_regions=="three",  lcolor(red) lwidth(thin) lpattern(solid)) ///
+			(line fitted_prob length if species=="blu" & region=="MDCHES" & n_regions=="three", lcolor(blue) lwidth(thin) lpattern(solid))  ///
+			(line fitted_prob length if species=="blu" & region=="CTALL" & n_regions=="one", lcolor(black) lwidth(thin) lpattern(solid) ///
+			legend(order(1 "N" 2 "S" 3 "NS" ) position(6) cols(2) ))
+			
+export delimited using "$input_data_cd/mean_catch_at_length_check.csv", replace 

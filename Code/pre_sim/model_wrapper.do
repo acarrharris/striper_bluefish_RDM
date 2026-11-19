@@ -35,7 +35,7 @@
 **************************************************ADJUST GLOBALS************************************************** 	
 * these need to be changed every year 
 global calibration_year "(year==2023)"  // For now, use catch data from 2023 as predictions for 2024. Alternative time periods can be tested.
-global calibration_year_prev "(year==2023 | year==2022)"  // For now, use catch data from 2023 as predictions for 2024. Alternative time periods can be tested.
+global calibration_year_prev "(year==2023 | year==2022)"  
 
 global calibration_date_start td(01jan2023)
 global calibration_date_end td(31dec2023)
@@ -54,7 +54,7 @@ global fed_holidays_y2 "inlist(day, td(01jan2024), td(15jan2024), td(19feb2024),
 global leap_yr_days "td(29feb2024)" 
 
 * choose number of draws to create. Will ultimately select ~100 for final model
-global ndraws 10
+global ndraws 101
 
 * adjust 2022 survey trip costs to account for inflation (January 2022 - January 2025)
 * source =https://www.bls.gov/data/inflation_calculator.htm
@@ -73,17 +73,20 @@ global length_data_cd "E:\Lou_projects\striper_bluefish_RDM\input_data\length da
 global seed 03211990
 
 * years/waves of MRIP data. 
-global yr_wvs 20221 20222 20223 20224 20225 20226  ///
+global yr_wvs 20201 20202 20203 20204 20205 20206 ///
+					 20211 20212 20213 20214 20215 20216 ///
+					 20221 20222 20223 20224 20225 20226  ///
 					 20231 20232 20233 20234 20235 20236  ///
-					 20241 20242 20243 20244 20245 20246  
-					 
-global yearlist 2022 2023 2024
+					 20241 20242 20243 20244 20245 20246  ///
+					 20251 20252 20253 20254 20255 20256  
+
+global yearlist 2020 2021 2022 2023 2024 2025
 global wavelist 1 2 3 4 5 6
 
 
 **************************************************Model calibration ************************************************** 
 // 1) Pull the MRIP data
-do "$input_code_cd\MRIP data wrapper.do"
+do "$input_code_cd\MRIP_data_wrapper.do"
 
 // 2) Estimate directed trips at the month, mode, kind-of day level
 do "$input_code_cd\directed_trips_calibration.do"
@@ -91,10 +94,10 @@ do "$input_code_cd\directed_trips_calibration.do"
 		*THIS NEEDS TO BE ADJUSTED EVERY YEAR. 
 
 // 3) Create distributions of costs per trip across strata - only needs to be run once
-do "$input_code_cd\survey trip costs.do"
+*do "$input_code_cd\survey_trip_costs.do"
 
 // 4) Create draw of angler preference parameters 
-*do "$input_code_cd\estimate angler preferences.do" - only needs to be run once
+*do "$input_code_cd\preference_param_draws.do" /// - only needs to be run once
 
 // 5) Estimate catch-per-trip at the month and mode level
 		//a) compute mean catch-per-trip and standard error, imputing standard errors from historcial data when they are missing. 
@@ -107,16 +110,16 @@ do "$input_code_cd\survey trip costs.do"
 		do "$input_code_cd\calibration_catch_per_trip_part2.do"
 
 // 6) compare calibration output to MRIP, and retain total simulated harvest and discards to apply to the baseline catch-at-length distribution
-		do "$input_code_cd\compare calibration data to MRIP.do" 
+		do "$input_code_cd\compare_calibration_data_to_MRIP.do" 
 
 // 7) add additonal angler demographics based on results of utilty model
 		do "$input_code_cd\additional_angler_dems.do" 
 
 // 8) Generate baseline-year catch-at-length, using the simulated harvest/discard totals from step 5
-		do "$input_code_cd\catch_at_length_calibration.do"
+		do "$input_code_cd\catch_at_length_calibration_multi_region.do"
 		
 // 9) Generate projection-year catch-at-length, incorporating the stock assessment data
-		do "$input_code_cd\catch_at_length_projection.do"
+		do "$input_code_cd\catch_at_length_projection_striper_bluefish.do"
 
 // The calibration and projection routines can now be run in R. 		
 

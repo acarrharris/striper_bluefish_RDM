@@ -13,11 +13,11 @@ set more off
 *---------------------------------------------------
 * 1) Import sample + survey and merge
 *---------------------------------------------------
-import delimited using "Sample.csv", clear 
+import delimited using "Sample_w_DOB_final.csv", clear 
 tempfile sample
 save `sample', replace
 
-import delimited using "SurveyData.csv", clear 
+import delimited using "SurveyData_w_DOB_final.csv", clear 
 
 * Ensure qtid is numeric for merge
 capture confirm numeric variable qtid
@@ -50,13 +50,35 @@ format survey_dt %td
 gen int survey_yr = year(survey_dt)
 gen int age = survey_yr - year_born if !missing(survey_yr, year_born)
 
+
+/* education levels: 
+1 = Some high school
+2 = High school graduate or GED
+3 = 2-year degree or trade school graduate
+4 = Some college
+5 = 4-year degree
+6 = Some graduate school
+7 = Master's degree (ex: MA, MS, MBA)
+8 = Professional or doctoral degree
+*/
 gen byte educ_coll = inlist(educ,3,4,5) if !missing(educ)
 gen byte educ_grad = inlist(educ,6,7,8) if !missing(educ)
-gen byte educ_coll_grad= inlist(educ,3,4,5, 6, 7, 8) if !missing(educ)
+gen byte educ_coll_grad= inlist(educ,3,4,5, 6,7,8) if !missing(educ)
+
+/* Income levels: 
+1 = Less than $20,000       
+2 = $20,000 to $39,999       
+3 = $40,000 to $59,999 
+4 = $60,000 to $79,999   
+5 = $80,000 to $99,999
+6 = $100,000 to $149,999
+7 = $150,000 to $199,999
+8 = $200,000 or more
+*/
 
 
-gen byte inc_med  = inlist(inc,4,5,6) if !missing(inc)
-gen byte inc_high = (inc>=7)          if !missing(inc)
+gen byte inc_med  = inlist(inc,4,5) if !missing(inc)
+gen byte inc_high = (inc>=6)          if !missing(inc)
 
 * impute # days past 12 months fishing that were for striped bass 
 * first check the percentile of total days 12
@@ -65,14 +87,18 @@ su days_any_salt12, detail
 
 egen p995days_any_salt12 = pctile(days_any_salt12), p(99.5)
 tab fishing_skill if days_any_salt12>p995days_any_salt12, missing
-replace days_any_salt12 =. if days_any_salt12>p995days_any_salt12 // replace as missing if total_trips_12 above the 99.5 percentile (200 days) because I don't trust that response
+replace days_any_salt12 =. if days_any_salt12>p995days_any_salt12 // remove extreme outliers: replace as missing if total_trips_12 above the 99.5 percentile (200 days) - 
 
 tab days_any_salt12, missing
-gen days_str_blue12 = (pct_days_stb_blu/100) * days_any_salt12
+gen days_str_blue12 = round((pct_days_stb_blu/100) * days_any_salt12)
+gen days_non_str_blue12 = days_any_salt12-days_str_blue12
+
 
 gen byte fishing_skill_1_2= inlist(fishing_skill, 1, 2) & !missing(fishing_skill)
 gen byte fishing_skill_3_4=inlist(fishing_skill, 3, 4) & !missing(fishing_skill)
 
+gen byte striper_c_and_r_only = inlist(stb_harvest_type, 1) & !missing(stb_harvest_type)
+gen byte blue_c_and_r_only = inlist(blu_harvest_type, 1) & !missing(blu_harvest_type)
 
 
 * Eligibility
@@ -93,9 +119,9 @@ drop block token selectionprob samplingweight
 preserve
 keep qtid version ///
      eligible ///
-     fishing_skill* days_any_salt12 days_str_blue12 pct_days_stb_blu mode_main ///
-     stb_harvest_type blu_harvest_type likely_next12 likely_to_fish ///
-     male age educ* inc* 
+     fishing_skill* days_any_salt12 days_str_blue12 days_non_str_blue12 pct_days_stb_blu mode_main ///
+     stb_harvest_type blu_harvest_type likely_next12 likely_to_fish lic_st registrant_dob p_firstname ///
+     male age educ* inc*  survey_yr striper_c_and_r_only stb_harvest_type complete_status blue_c_and_r_only
 tempfile ind_vars
 save `ind_vars'	, replace 
 restore 
@@ -161,13 +187,63 @@ foreach v in cost striper_length bluefish_length striper_keep striper_rel bluefi
 
 rename fish_other_species opt_other
 
+distinct qtid
+
+* respondents by license state
+preserve
+keep qtid lic_st version
+duplicates drop 
+gen n_respondents=1
+split version, parse(" ")
+rename version1 svy_version
+drop version2 version3 version4
+collapse (sum) n_respondents , by(lic)
+restore 
+
 
 keep if eligible==1
 
+distinct qtid
+
+* impute ages and gender based on DOB and first name if missing
+browse qtid age male p_first registrant_dob if (age==. | male==.) 
+split registrant_dob, parse(-)
+rename  registrant_dob3 registrant_year
+destring registrant_year, replace
+replace age = survey_yr - registrant_year if !missing(survey_yr, registrant_year) & age==.
+drop registrant_dob1 registrant_dob2 registrant_year
+browse qtid age male p_first  if (male==.) 
+replace male=1 if male==. & inlist(p_firstname, "Alan","Alexander","Alonso","Andres","Andrew")
+replace male=1 if male==. & inlist(p_firstname, "Bradford","Brendan","Brian","Bryan","Cole")
+replace male=1 if male==. & inlist(p_firstname, "Donald","Douglas","Edward","Ethan","Flavio","Geoff")
+replace male=1 if male==. & inlist(p_firstname, "Gerard","Giulio","Glenn","Gregory","James","Jarrod")
+replace male=1 if male==. & inlist(p_firstname, "Jesse","Joe","John","Jose","Joseph","Julian","Kaden")
+replace male=1 if male==. & inlist(p_firstname, "Karl","Keith","Liam","Luciano","Mark","Matthew","Michael")
+replace male=1 if male==. & inlist(p_firstname, "Mitchell","Pablo","Paul","Pedro","Peter","Raul","Richard")
+replace male=1 if male==. & inlist(p_firstname, "Robb","Robert","Ronald","Roy","Scott","Seth","Steven")
+replace male=1 if male==. & inlist(p_firstname, "Thomas","Tyler","Walter","Wayne","Wesley","William")
+replace male=0 if male==. & inlist(p_firstname, "Beth","Dana","Deborah","Laura","Lauren","Lorraine")
+replace male=0 if male==. & inlist(p_firstname, "Michelle","Rebecca","Tania","Virginia")
+
+replace male=0 if male==. & inlist(p_firstname, "Alyssa","Caitlin","Claudia","Gloria", "Danielle")
+replace male=0 if male==. & inlist(p_firstname, "Kara","Katie","Lindsey","Macy")
+replace male=0 if male==. & inlist(p_firstname, "Sherry","Katie","Lindsey","Macy")
+replace male=1 if male==. & inlist(p_firstname, "Andre","Anthony","Antony","Charles","Christopher","Clifford")
+replace male=1 if male==. & inlist(p_firstname, "Colin","Daniel","David","Dean","Eric","Felix")
+replace male=1 if male==. & inlist(p_firstname, "Gary","Gavin","Jacques","Jeff","Jonathon","Julio")
+replace male=1 if male==. & inlist(p_firstname, "Kevin","Leonidas","Marlon","Matthias","Mauro","Nick")
+replace male=1 if male==. & inlist(p_firstname, "Oliver","Rafael","Roger","Stephen","Teodoro","Timothy")
+replace male=0 if male==. & inlist(p_firstname, "Blanca")
+replace male=1 if male==. & inlist(p_firstname, "Thatcher")
+
+browse qtid age male p_first  if (male==.) 
+levelsof p_first  if (male==.), clean
+drop p_firstname registrant_dob survey_yr
 
 * Identify "protest" responses
 *a) never chose a fishing alternative
 egen sum_choices=sum(choice), by(qtid)
+order sum_choices
 
 *drop if no choice experiment questions answered
 drop if sum_choices==0
@@ -187,6 +263,7 @@ mvencode no_choice_protest, mv(0)
 sort qtid scenario alt
 tab sum_choices if no_choice_protest==1
 distinct qtid if no_choice_protest==1
+browse if no_choice_protest==1
 
 * b) only chose the "other" fishing alternative
 gen choice_alt_3=1 if choice==1 & alt==3
@@ -196,15 +273,17 @@ order sum_choice_alt_3 alt3_choice_protest //no alt3 only choice
 sort qtid scenario alt
 tab sum_choices if alt3_choice_protest==1
 distinct qtid if alt3_choice_protest==1
+browse if alt3_choice_protest==1
 
 * c) always chose option A fishing alternative
 gen choice_alt_1=1 if choice==1 & alt==1
 egen sum_choice_alt_1=sum(choice_alt_1), by(qtid)
 gen alt1_choice_protest=1 if sum_choices==sum_choice_alt_1 & sum_choices>2
 order sum_choice_alt_1 alt1_choice_protest //no alt3 only choice
-browse if alt1_choice_protest==1
+*browse if alt1_choice_protest==1
 distinct qtid if alt1_choice_protest==1
 tab sum_choices if alt1_choice_protest==1
+browse if alt1_choice_protest==1
 
 * c) always chose option B fishing alternative
 gen choice_alt_2=1 if choice==1 & alt==2
@@ -213,15 +292,56 @@ gen alt2_choice_protest=1 if sum_choices==sum_choice_alt_2 & sum_choices>2
 order sum_choice_alt_2 alt2_choice_protest //no alt3 only choice
 distinct qtid if alt2_choice_protest==1
 tab sum_choices if alt2_choice_protest==1
+browse if alt2_choice_protest==1
 
 distinct qtid if no_choice_protest==1 | alt3_choice_protest==1 |  alt1_choice_protest==1 | alt2_choice_protest==1
+*browse if no_choice_protest==1 | alt3_choice_protest==1 |  alt1_choice_protest==1 | alt2_choice_protest==1
+browse
 
-drop sum_choice_alt_2 sum_choice_alt_1 sum_choice_alt_3 sum_choices choice_alt_4 choice_alt_3 choice_alt_1 choice_alt_2 sum_choice_alt_4
+* less restrictive protest definition:
+	* respondent first choice was the same and they answered at least 3 choice questions (the above definition) +
+	* respondent also selected the same second choice
+	
+tostring first, gen(first_str)
+tostring second, gen(second_str)
+gen first_second=first_str+"_"+second_str
+
+gen second_choice_protest=.
+
+levelsof qtid if no_choice_protest==1 | alt3_choice_protest==1 |  alt1_choice_protest==1 | alt2_choice_protest==1, local(protests)
+foreach q of local protests{
+	distinct first_second if qtid==`q'
+	if `r(ndistinct)'==1{
+		replace second_choice_protest=1 if qtid==`q'
+	}
+	
+}
+
+distinct qtid if no_choice_protest==1 | alt3_choice_protest==1 |  alt1_choice_protest==1 | alt2_choice_protest==1
+distinct qtid if (no_choice_protest==1 | alt3_choice_protest==1 |  alt1_choice_protest==1 | alt2_choice_protest==1) & second_choice_protest==1
+mvencode second_choice_protest, mv(0) override
+
+drop sum_choice_alt_2 sum_choice_alt_1 sum_choice_alt_3 sum_choices choice_alt_4 choice_alt_3 choice_alt_1 choice_alt_2 sum_choice_alt_4  first_str second_str  first_second
 
 
+tab fishing_skill, gen(fishing_skill_cat) 
+
+foreach v in striper_keep striper_rel  bluefish_keep bluefish_rel {
+			gen sqrt_`v'=sqrt(`v')
+	 }
+
+	 
+foreach v in cost     ///
+					male age educ_coll educ_grad fishing_skill_cat2 fishing_skill_cat3 fishing_skill_cat4  ///
+					likely_to_fish days_str_blue12  days_non_str_blue12 striper_keep striper_rel striper_length bluefish_keep bluefish_rel bluefish_length ///
+					sqrt_striper_keep sqrt_striper_rel sqrt_bluefish_keep sqrt_bluefish_rel{
+						tab `v' , missing
+					}
 
 *interactions
-foreach v in fishing_skill_1_2 fishing_skill_3_4  days_any_salt12 days_str_blue12  likely_to_fish male age educ_coll educ_grad educ_coll_grad inc_med inc_high {
+foreach v in fishing_skill_1_2 fishing_skill_3_4  days_any_salt12 days_str_blue12  days_non_str_blue12 likely_to_fish ///
+male age educ_coll educ_grad educ_coll_grad inc_med inc_high ///
+fishing_skill_cat2 fishing_skill_cat3 fishing_skill_cat4{
 				  	
     capture confirm variable `v'
     if !_rc gen opt_out_`v' = opt_out * `v'
@@ -229,12 +349,53 @@ foreach v in fishing_skill_1_2 fishing_skill_3_4  days_any_salt12 days_str_blue1
 
 }
 
-foreach v in striper_keep striper_rel  bluefish_keep bluefish_rel {
-			gen sqrt_`v'=sqrt(`v')
-	 }
+replace striper_length=0 if inlist(alt, 1, 2) & striper_keep==0 & striper_rel==0
+replace bluefish_length=0 if inlist(alt, 1, 2) & bluefish_keep==0 & bluefish_rel==0
 
-	 
-	 
+
+*interactions between the harvest variables 
+gen sqrt_striper_blue_keep= sqrt_striper_keep*sqrt_bluefish_keep
+gen striper_blue_keep= striper_keep*bluefish_keep
+
+gen sqrt_striper_keep_length=sqrt_striper_keep*striper_length
+gen sqrt_striper_rel_length=sqrt_striper_rel*striper_length
+gen sqrt_bluefish_keep_length=sqrt_bluefish_keep*bluefish_length
+gen sqrt_bluefish_rel_length=sqrt_bluefish_rel*bluefish_length
+
+gen sqrt_striper_keep_length2=sqrt_striper_keep*striper_length^2
+gen sqrt_striper_rel_length2=sqrt_striper_rel*striper_length^2
+
+gen sqrt_bluefish_keep_length2=sqrt_bluefish_keep*bluefish_length^2
+gen sqrt_bluefish_rel_length2=sqrt_bluefish_rel*bluefish_length^2
+
+gen striper_keep_length=striper_keep*striper_length
+gen striper_rel_length=striper_rel*striper_length
+
+gen bluefish_keep_length=bluefish_keep*bluefish_length
+gen bluefish_rel_length=bluefish_rel*bluefish_length
+
+gen striper_keep_length2=striper_keep*striper_length^2
+gen striper_rel_length2=striper_rel*striper_length^2
+
+gen bluefish_keep_length2=bluefish_keep*bluefish_length^2
+gen bluefish_rel_length2=bluefish_rel*bluefish_length^2
+
+gen striper_regs_clean = strtrim(striper_regs)
+replace striper_regs_clean = itrim(striper_regs_clean)
+gen striper_bag = real(regexs(1)) if regexm(striper_regs_clean, "^([0-9]+)")
+gen striper_min = real(regexs(1)) if ///
+    regexm(striper_regs_clean, "([0-9]+)" + char(34))
+gen striper_max = real(regexs(1)) if ///
+    regexm(striper_regs_clean, "and ([0-9]+)" + char(34))
+	list striper_regs striper_min striper_max if _n <= 20
+	gen max_dummy = !missing(striper_max)
+gen slot_length = striper_max - striper_min if max_dummy==1
+replace slot_length = 0 if max_dummy==0
+
+
+save "E:\Lou_projects\striper_bluefish_RDM\input_data\striper_CE_data.dta", replace
+	
+	
 ****************************************************
 * Example estimation
 ****************************************************
@@ -294,20 +455,100 @@ clogit choice cost sqrt_striper_keep sqrt_striper_rel striper_length sqrt_bluefi
 	if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
 	group(gid) vce(cluster qtid)			
 	
+
 clogit choice cost sqrt_striper_keep sqrt_striper_rel striper_length sqrt_bluefish_keep sqrt_bluefish_rel bluefish_length opt_other opt_out ///
-	opt_out_male opt_out_age opt_out_educ_coll_grad opt_out_fishing_skill_3_4  ///
+	opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad opt_out_fishing_skill_3_4  ///
 	opt_other_likely opt_other_days_str_blue12  ///
 	if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
 	group(gid) vce(cluster qtid)		
 
 
+	
+*baseline MNL	
+clogit choice cost sqrt_striper_keep sqrt_striper_rel striper_length sqrt_bluefish_keep sqrt_bluefish_rel bluefish_length opt_other opt_out ///
+	opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad opt_out_fishing_skill_cat2 opt_out_fishing_skill_cat3 opt_out_fishing_skill_cat4  ///
+	opt_other_likely opt_other_days_str_blue12  opt_other_days_non_str_blue12 ///
+	if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+	group(gid) vce(cluster qtid)		
+	
 
 	
+* interactions with length
+clogit choice cost sqrt_striper_keep c.sqrt_striper_keep#c.striper_length ///
+					       sqrt_striper_rel c.sqrt_striper_rel#c.striper_length ///
+							sqrt_bluefish_keep c.sqrt_bluefish_keep#c.bluefish_length ///
+							sqrt_bluefish_rel c.sqrt_bluefish_rel#c.bluefish_length ///
+							opt_other opt_out ///
+	opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad opt_out_fishing_skill_cat2 opt_out_fishing_skill_cat3 opt_out_fishing_skill_cat4  ///
+	opt_other_likely opt_other_days_str_blue12 opt_other_days_non_str_blue12 ///
+	if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+	group(gid) vce(cluster qtid)		
+	
+	
+* interactions with length, centered at mean
+su striper_length if inlist(alt, 1,2) & striper_keep>0 & e(sample)
+gen c_striper_keep_length= striper_length-`r(mean)'
+
+su striper_length if inlist(alt, 1,2) & striper_rel>0 & e(sample)
+gen c_striper_rel_length= striper_length-`r(mean)'
+
+su bluefish_length if inlist(alt, 1,2) & bluefish_keep>0 & e(sample)
+gen c_bluefish_keep_length= bluefish_length-`r(mean)'
+
+su bluefish_length if inlist(alt, 1,2) & bluefish_rel>0 & e(sample)
+gen c_bluefish_rel_length= bluefish_length-`r(mean)'
+ 	
+clogit choice cost sqrt_striper_keep c.sqrt_striper_keep#c.c_striper_keep_length ///
+					       sqrt_striper_rel c.sqrt_striper_rel#c.c_striper_rel_length ///
+							sqrt_bluefish_keep c.sqrt_bluefish_keep#c.c_bluefish_keep_length ///
+							sqrt_bluefish_rel c.sqrt_bluefish_rel#c.c_bluefish_rel_length ///
+							opt_other opt_out ///
+	opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad opt_out_fishing_skill_cat2 opt_out_fishing_skill_cat3 opt_out_fishing_skill_cat4  ///
+	opt_other_likely opt_other_days_str_blue12  ///
+	if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+	group(gid) vce(cluster qtid)		
+	
+	
 ****************************************************
+* interactions with length, centered at mean, mixed logit
+gen sqrt_striper_keep_clength=sqrt_striper_keep*c_striper_keep_length
+gen sqrt_striper_rel_clength=sqrt_striper_rel*c_striper_rel_length
+gen sqrt_bluefish_keep_clength=sqrt_bluefish_keep*c_bluefish_keep_length
+gen sqrt_bluefish_rel_clength=sqrt_bluefish_rel*c_bluefish_rel_length
 
 
+mixlogit choice cost  sqrt_striper_keep_clength sqrt_striper_rel_clength ///
+				sqrt_bluefish_keep_clength sqrt_bluefish_rel_clength ///
+				opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad ///
+				opt_out_fishing_skill_cat2 opt_out_fishing_skill_cat3 opt_out_fishing_skill_cat4  ///
+				opt_other_likely opt_other_days_str_blue12  ///
+				if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+				group(gid) id(qtid) rand(sqrt_striper_keep sqrt_striper_rel sqrt_bluefish_keep sqrt_bluefish_rel opt_other opt_out ) nrep(500)
+					
 
+mixlogit choice cost  sqrt_striper_keep_clength sqrt_striper_rel_clength  ///
+					sqrt_bluefish_keep_clength sqrt_bluefish_rel_clength ///
+					opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad ///
+					opt_out_fishing_skill_3_4  ///
+					opt_other_likely opt_other_days_str_blue12  ///
+					if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+					group(gid) id(qtid) rand(sqrt_striper_keep sqrt_striper_rel sqrt_bluefish_keep sqrt_bluefish_rel opt_other opt_out ) nrep(500)	  
+					
+					
+* interactions with bluefish lengths never significant, omit them
+mixlogit choice cost  sqrt_striper_keep_clength sqrt_striper_rel_clength  ///
+					opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad ///
+					opt_out_fishing_skill_cat2 opt_out_fishing_skill_cat3 opt_out_fishing_skill_cat4  ///
+					opt_other_likely opt_other_days_str_blue12  ///
+					if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+					group(gid) id(qtid) rand(sqrt_striper_keep sqrt_striper_rel sqrt_bluefish_keep sqrt_bluefish_rel opt_other opt_out ) nrep(500)
 
+					
+mixlogit choice cost  sqrt_striper_keep_clength sqrt_striper_rel_clength  ///
+					opt_out_male opt_out_age opt_out_educ_coll opt_out_educ_grad ///
+					opt_out_fishing_skill_3_4  ///
+					opt_other_likely opt_other_days_str_blue12  ///
+					if no_choice_protest!=1 & alt3_choice_protest!=1 &  alt1_choice_protest!=1 & alt2_choice_protest!=1, ///
+					group(gid) id(qtid) rand(sqrt_striper_keep sqrt_striper_rel sqrt_bluefish_keep sqrt_bluefish_rel opt_other opt_out ) nrep(500)	  
 
-
-	  
+					

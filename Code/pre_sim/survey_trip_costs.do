@@ -1,5 +1,7 @@
 
-***This code creates trip cost distributions based on the Sabrina's 2017 trip expenditure survey data
+* New code 4/30/26
+
+** This code creates trip cost distributions based on the Sabrina's 2012 trip expenditure survey data
 
 set seed $seed
 
@@ -25,7 +27,7 @@ replace brentexp = . if mode == "Shore"
 
 
 *keep only the states we need (MA-NC) 
-keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37, 23, 33)
+keep if inlist(st, 25, 44, 9,  36 , 34, 10, 24, 51, 37, 23, 33)
 
 gen state="MA" if st==25
 replace state="MD" if st==24
@@ -45,6 +47,8 @@ mvencode afuelexp arentexp ptransexp lodgexp grocexp restexp baitexp iceexp park
 *replace some non-trip expenses included in "other" category as zero
 replace othexp=0 if inlist(oth_cat, "2 LICENSES", "BOAT REPAIR", "Boat Towing", "CART", "FISHING LICENSE")
 replace othexp=0 if inlist(oth_cat,"LICENSE", "LICENSES", "MONEY SPENT AT CASINO", "NEW ROD", "SEATOW", "SPA", "HAT")
+replace othexp=0 if inlist(oth_cat,"ALL WATERS LICENSE", "ANGLER GOT A SPEEDING TICKET", "BOAT CLEANING", "CASINOS", "ENTERTAINMENT")
+replace othexp=0 if inlist(oth_cat,"FIREWOOD", "POOL", "REGISTRATION", "SUNGLASSES", "TAKING BOAT TO CAR WASH", "WATER PARK", "WOOD")
 
 
 * Compute total trip expenditure
@@ -62,29 +66,6 @@ merge m:1 prim2 using "$input_data_cd\prim2.dta", keep(1 3) nogen
 	*4=headboat
 	*5=charter
 	*7=private boat
-/*
-svy: tabstat total_exp, stat(mean sd) by(state)
-svy: mean total_exp if state=="MA"
-svy: mean total_exp if state=="RI"
-svy: mean total_exp if state=="CT"
-svy: mean total_exp if state=="NY"
-svy: mean total_exp if state=="NJ"
-svy: mean total_exp if state=="DE"
-svy: mean total_exp if state=="MD"
-svy: mean total_exp if state=="VA"
-svy: mean total_exp if state=="NC"
-*/
-/*
-mat b=e(b)'
-mat v= e(V)
-
-clear 
-svmat b
-rename b1 mean
-svmat v
-rename v1 st_error
-replace st_error=sqrt(st_error)
-*/
 
 gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
 replace mode1="fh" if inlist(mode_fx, "4", "5")
@@ -93,12 +74,13 @@ replace mode1="pr" if inlist(mode_fx,  "7")
 *Adjust for inflation
 replace total_exp = total_exp*$inflation_expansion
 
-gen common_dom="1" if inlist(prim1_common, "stripedbass", "bluefish")
+*New approach computes trip cost distribution based on directed trips for sf, bsb, or scup
+gen common_dom="1" if inlist(prim1_common, "stripedbass", "bluefish") | inlist(prim2_common, "stripedbass", "bluefish")
 replace common_dom="2" if common_dom==""
 
-keep if common_dom=="1"
+*keep if common_dom=="1"
 
-gen domain=state+"_"+mode1
+gen domain=state+"_"+mode1+"_"+common_dom
 encode domain, gen(domain2)
 
 
@@ -128,9 +110,11 @@ order domain
 split domain, parse(_)
 rename domain1 state
 rename domain2 mode
+rename domain3 common_dom
+
 renam b cost 
-keep state mode cost se  ll ul
-order state mode cost se  ll ul
+keep state mode common_dom cost se  ll ul
+order state mode common_dom cost se  ll ul
 tempfile observed 
 save `observed', replace 
 restore
@@ -138,12 +122,24 @@ restore
 
 *Two-part ("hurdle") simulation with a calibrated lognormal for positive costs, by state×mode domain.
 drop domain
-egen str5 domain = concat(state mode1), punct("_")
+egen str5 domain = concat(state mode1 common_dom), punct("_")
 encode domain, gen(dom2)
 
 *keep if domain=="CT_pr"
 svy: mean total_exp, over(dom2)
 gen cost=total_exp
+
+
+preserve
+keep if common_dom=="1"
+keep cost state mode1  
+bysort state mode1: egen max_cost=max(cost)
+keep state mode1 max
+rename mode1 mode
+duplicates drop 
+tempfile max_cost
+save `max_cost', replace 
+restore
 
 * Observed cap (e.g., 99th percentile) for positive costs
 /*
@@ -201,7 +197,7 @@ restore
 *provides Bernoulli probability used later in simulation: spend = (runiform() < p_hat)
 preserve
 tempfile p_pos
-postfile P int dom2 str5 domain double p_hat se_p long N using `p_pos', replace
+postfile P int dom2 str7 domain double p_hat se_p long N using `p_pos', replace
 
 levelsof dom2, local(domlist)
 
@@ -228,7 +224,7 @@ preserve
 keep if cost > 0 & !missing(dom2, lncost, lncost2)
 
 tempfile ln_parms
-postfile L int dom2 str5 domain double mu_hat m2_hat sig2_hat double v11 v22 v12 long N using `ln_parms', replace
+postfile L int dom2 str7 domain double mu_hat m2_hat sig2_hat double v11 v22 v12 long N using `ln_parms', replace
 
 levelsof dom2, local(domlist)
 
@@ -262,8 +258,7 @@ merge 1:1 dom2 using `meanpos', nogen
 *simulated positive-cost mean should line up with the survey-estimated positive-cost mean (up to Monte Carlo error), while keeping the estimated log-variance sig2_hat
 gen double mu_adj = ln(mean_pos) - 0.5*sig2_hat
 
-*keep if domain=="DE_fh"
-local n_draws = 50000
+local n_draws = 10000
 
 expand `n_draws'
 bysort dom2: gen long draw = _n
@@ -285,48 +280,33 @@ list dom2 domain p_hat share_zero in 1/10
 split domain, parse(_)
 rename domain1 state
 rename domain2 mode
+rename domain3 common_dom
 rename draw tripid
-keep mode cost tripid state
+keep mode cost tripid state common_dom
 compress
 
 format cost %9.2f
-order state mode tripid cost
+order state mode common_dom tripid cost
+keep if common_dom=="1"
 
-*compare simulated versus observed
+*when cost_sim>max(observed cost), set cost_sim=cost_sim>max(observed cost), by state-mode 
+merge m:1 state mode using `max_cost'
+replace cost=max if cost_sim>max
+drop max common _merge 
 /*
-collapse (mean) cost_sim=cost (sd) sd_cost=cost, by(state mode)
-merge 1:1 state mode using `observed'
+*compare simulated versus observed
+collapse (mean) cost_sim=cost (sd) sd_cost=cost, by(state mode common_dom)
+merge 1:1 state mode common_dom using `observed'
 gen se_sim=sqrt(sd)
 
-order state mode cost_sim cost se_sim se
+order state mode common_dom cost_sim cost se_sim se
 gen pct_dif=((cost_sim-cost)/cost)*100
 
 su pct_dif
 */
 
+
 save "$input_data_cd\trip_costs.dta", replace 
 
-/*
-levelsof domain, local(domains)
 
-tempfile new
-save `new', replace
-
-mata: mata clear
-clear
-tempfile master
-save `master', emptyok
-foreach d of local domains{
-	u `new', clear 
-	keep if domain=="`d'"
-	collapse (mean) cost_sim (sd) sd_cost=cost_sim, by(domain)
-    append using `master'
-    save `master', replace
-    clear                            
-        }
-
-
-use `master', clear
-sort domain
-*/
 

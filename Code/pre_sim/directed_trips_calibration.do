@@ -47,7 +47,6 @@ keep prim1 prim1_common
 duplicates drop 
 drop if prim1=="" | prim1_common==""
 duplicates tag prim1, gen(dup)
-*browse if dup>0
 drop if dup>0
 drop dup
 save "$input_data_cd/prim1.dta", replace
@@ -59,7 +58,6 @@ duplicates drop
 drop if prim2=="" | prim2_common==""
 duplicates drop 
 duplicates tag prim2, gen(dup)
-*browse if dup>0
 drop if dup>0
 drop dup
 save "$input_data_cd/prim2.dta", replace
@@ -147,13 +145,12 @@ replace mgt="ALL" if mgt==""
 drop region
 gen region=state+mgt
 
-
 drop _merge
 
 tempfile base1
 save `base1', replace 
 
-levelsof region /*if state=="MA"*/, local(sts)
+levelsof region, local(sts)
 foreach s of local sts{
 	*local s="DEDERIV"
 	u `base1', clear 
@@ -639,7 +636,7 @@ drop region
 gen region="`s'"
 
 *call the regulations file	
-do "$input_code_cd/set regulations.do"	
+do "$input_code_cd/set_regulations.do"	
 
 		
 preserve
@@ -1095,3 +1092,183 @@ renvarlab dtrip se ll ul, postfix(_mrip)
 save "$input_data_cd\mrip_dtrip_by_region_mode_month.dta", replace 
 
 
+
+*estimates by coast
+set seed $seed 
+
+cd $input_data_cd
+
+clear
+tempfile tl1 cl1
+dsconcat $triplist
+
+/*dtrip will be used to estimate total directed trips*/
+gen dtrip=1
+
+sort year strat_id psu_id id_code
+save `tl1'
+
+clear
+
+dsconcat $catchlist
+sort year strat_id psu_id id_code
+replace common=subinstr(lower(common)," ","",.)
+save `cl1'
+
+use `tl1'
+merge 1:m year strat_id psu_id id_code using `cl1', keep(1 3)
+replace common=subinstr(lower(common)," ","",.)
+replace prim1_common=subinstr(lower(prim1_common)," ","",.)
+replace prim2_common=subinstr(lower(prim2_common)," ","",.)
+
+drop _merge
+
+keep if $calibration_year
+
+/* ensure only relevant states */
+keep if inlist(st, 25, 44, 9, 36, 34, 10, 24, 51, 37, 23, 33)
+
+gen state="MA" if st==25
+replace state="MD" if st==24
+replace state="RI" if st==44
+replace state="CT" if st==9
+replace state="NY" if st==36
+replace state="NJ" if st==34
+replace state="DE" if st==10
+replace state="VA" if st==51
+replace state="NC" if st==37
+replace state="ME" if st==23
+replace state="NH" if st==33
+
+tostring wave, gen(w2)
+tostring year, gen(year2)
+gen st2 = string(st,"%02.0f")
+
+gen mode1="sh" if inlist(mode_fx, "1", "2", "3")
+replace mode1="pr" if inlist(mode_fx, "7")
+replace mode1="fh" if inlist(mode_fx, "4", "5")
+
+gen date=substr(id_code, 6,8)
+gen month1=substr(date, 5, 2)
+gen day1=substr(date, 7, 2)
+drop if inlist(day1,"9x", "xx") 
+destring day1, replace
+destring month, replace
+gen date2=dmy(day1, month, year)
+format date2 %td
+
+*keep if inlist(state, "DE", "NC", "NY", "VA")
+*keep if inlist(state, "DE")
+
+preserve
+import excel using "$input_data_cd/SB_MRIP_Management_Areas_DE_NC_NY_VA_reformat.xlsx", clear firstrow
+duplicates drop 
+drop if intsite==483 & state=="NC" & mgt=="CENTRAL SOUTHERN"
+tempfile sites
+save `sites', replace
+restore
+merge m:1 state intsite using `sites', keep(1 3)
+
+*browse if _merge==1
+replace mgt = "DE_RIVER_BAY_PRIMARY_AREA" if mgt=="" & state=="DE" & inlist(intsite, 65, 73, 106) 
+replace mgt= "CHESAPEAKE BAY" if mgt=="" & state=="VA" & inlist(intsite, 212, 995) 
+
+
+*rename mgt areas 
+replace mgt="ALB"  if mgt=="ALBEMARLE SOUND" 
+replace mgt="OCN"  if mgt=="ATLANTIC OCEAN" 
+replace mgt="CNTRL"  if mgt=="CENTRAL SOUTHERN" 
+replace mgt="CHES"  if mgt=="CHESAPEAKE BAY" 
+replace mgt="NANT"  if mgt=="DE_NATICOKE_RIVER_SPAWNING_AREA" 
+replace mgt="DERIV"  if mgt=="DE_RIVER_BAY_PRIMARY_AREA" 
+replace mgt="HUDN"  if mgt=="HUDSON_NORTH_OF_GW_BRIDGE" 
+replace mgt="HUDS"  if mgt=="MARINE_AND_SOUTH_OF_GW_BRIDGE" 
+replace mgt="POTO"  if mgt=="POTOMAC RIVER TRIBUTARIES" 
+
+replace mgt="OCN" if state=="DE" & area=="1"
+
+
+**Deal with Maryland**
+
+* First, identify Potomac River sites. 
+* There are a handful of sites along the Potomoac River, but near a striper-regs-map mgt. area
+* If a trip is a boat trip, classify it as POT
+* If a trip is a shore, classify it as CHES, unless it is one of the few sites where a shore trip would likely be fishing in the POT
+replace mgt="POT" if state=="MD" & inlist(intsite, 788, 1969, 1865, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "pr", "fh")
+replace mgt="POT" if state=="MD" & inlist(intsite, 1865) & inlist(mode1, "sh")
+replace mgt="CHES" if state=="MD" & inlist(intsite, 788, 1969, 0107, 3076, 3077, 3774, 0233) & inlist(mode1, "sh")
+
+* Next, MD coastal sites
+replace mgt="OCN"  if state=="MD" & inlist(intsite,3097, 853, 4419, 24, 856, 1493, 858, 860,  906, 4349, 1658, 152, 1183, 3442)
+
+* Lastly, merge MD march-may sites to regulation region site list 
+replace mgt="CHES" if state=="MD"  & mgt==""
+
+
+replace mgt="ALL" if mgt==""
+
+drop region
+gen region=state+mgt
+
+gen str1 dom_id="2"
+replace dom_id="1" if strmatch(common, "stripedbass") 
+replace dom_id="1" if strmatch(prim1_common, "stripedbass") 
+
+replace dom_id="1" if strmatch(common, "bluefish") 
+replace dom_id="1" if strmatch(prim1_common, "bluefish") 
+
+// Deal with Group Catch: 
+	// This bit of code generates a flag for each year-strat_id psu_id leader. (equal to the lowest of the dom_id)
+	// Then it generates a flag for claim equal to the largest claim.  
+	// Then it re-classifies the trip into dom_id=1 if that trip had catch of species in dom_id1 
+
+replace claim=0 if claim==.
+
+gen domain_claim=claim if inlist(common, "stripedbass", "bluefish") 
+
+mvencode domain_claim, mv(0) override
+
+bysort strat_id psu_id leader (dom_id): gen gc_flag=dom_id[1]
+bysort strat_id psu_id leader (domain_claim): gen claim_flag=domain_claim[_N]
+replace dom_id="1" if strmatch(dom_id,"2") & claim_flag>0 & claim_flag!=. & strmatch(gc_flag,"1")
+
+gen my_dom_id_string=dom_id
+replace my_dom_id_string=ltrim(rtrim(my_dom_id_string))
+
+encode my_dom_id_string, gen(my_dom_id)
+
+/* keep 1 observation per year-strat-psu-id_code. This will have dom_id=1 if it targeted or caught my_common1 or my_common2. Else it will be dom_id=2*/
+bysort year wave strat_id psu_id id_code (dom_id): gen count_obs1=_n
+keep if count_obs1==1
+
+replace wp_int=0 if wp_int<=0
+svyset psu_id [pweight= wp_int], strata(strat_id) singleunit(certainty)
+
+preserve
+keep my_dom_id my_dom_id_string
+duplicates drop 
+tempfile domains
+save `domains', replace 
+restore
+
+svy: total dtrip, over(my_dom_id)  
+
+xsvmat, from(r(table)') rownames(rname) names(col) norestor
+split rname, parse("@")
+drop rname1
+split rname2, parse(.)
+drop rname2 rname22
+rename rname21 my_dom_id
+destring my_dom_id, replace
+merge 1:1 my_dom_id using `domains'
+drop rname my_dom_id _merge 
+order my_dom_id_string
+
+rename my_dom_id_string common_dom
+
+keep if common=="1"
+keep b se  ll ul 
+rename b dtrip 
+renvarlab dtrip se ll ul, postfix(_mrip)
+
+save "$input_data_cd\mrip_dtrip_by_coast.dta", replace 

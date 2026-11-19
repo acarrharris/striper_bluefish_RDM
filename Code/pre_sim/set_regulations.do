@@ -66,11 +66,11 @@ gen int dom   = day(day)
 replace bluefish_bag = 3 if inlist(mode,"Private","Shore") 
 replace bluefish_bag = 5 if mode=="For-hire" 
 * Maine exception: for-hire = 3 
-replace bluefish_bag = 3 if region=="ME" & mode=="For-hire" 
+replace bluefish_bag=3 if region=="MEALL" & mode=="For-hire"
 * New Hampshire season Jan 1–Sep 30 (set closed outside) 
-replace bluefish_bag = 0 if region=="NH" & (month>=10 | month<=12) 
+replace bluefish_bag=0 if region=="NHALL" & month>=10
 * Bluefish min size: MD areas only 
-replace bluefish_min = 8 if inlist(region,"MDCB","MDOC","MDPOT")
+replace bluefish_min=8 if inlist(region,"MDCHES","MDOCN","MDPOT")
 
 *========================================================
 * 5) STRIPER rules (region set matches your Excel)
@@ -150,7 +150,6 @@ replace striper_bag = 0 if region=="MDCHES" & (month==12 & dom>=11)
 
 * PRFC mainstem Potomac (MDPOT, VAPOTO): C&R only Jan 1–Apr 30; targeting closure Jul 7–Aug 20
 replace striper_bag = 0 if inlist(region,"MDPOT","VAPOTO") & inrange(month,1,4)
-replace striper_bag = 0 if inlist(region,"MDPOT","VAPOTO") & ( (month==7 & dom>=7) | (month==8) | (month==9 & dom<=20) ) 
 *///    if 0  // (DO NOT USE) placeholder to avoid accidental wrong logic
 
 * Correct PRFC closure Jul 7–Aug 20
@@ -193,7 +192,7 @@ replace striper_min = 35   if region=="MDCHES" & month==5 & inrange(dom,1,15)
 replace striper_max = 100  if region=="MDCHES" & month==5 & inrange(dom,1,15)
 
 * PRFC trophy: May 1–May 15: >=35 (no max), bag=2
-replace striper_bag = 2    if inlist(region,"MDPOT","VAPOTO") & month==5 & inrange(dom,1,15)
+replace striper_bag = 1 if inlist(region,"MDPOT","VAPOTO") & month==5 & inrange(dom,1,15)
 replace striper_min = 35   if inlist(region,"MDPOT","VAPOTO") & month==5 & inrange(dom,1,15)
 replace striper_max = 100  if inlist(region,"MDPOT","VAPOTO") & month==5 & inrange(dom,1,15)
 
@@ -277,8 +276,8 @@ gen year_y2=year(day_y2)
 drop if day_y2==$leap_yr_days
 gen dow_y2 = dow(day_y2)  
 
-gen kod_y2="we" if inlist(dow, 5, 6, 0)
-replace kod_y2="wd" if inlist(dow, 1, 2, 3, 4)		
+gen kod_y2="we" if inlist(dow_y2, 5, 6, 0)
+replace kod_y2="wd" if inlist(dow_y2, 1, 2, 3, 4)		
 replace kod_y2="we" if $fed_holidays_y2
 
 gen month2_y2= string(month,"%02.0f")
